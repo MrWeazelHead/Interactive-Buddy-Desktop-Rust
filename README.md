@@ -2,8 +2,7 @@
 
 A Rust/Bevy recreation based on the supplied local Interactive Buddy v1.02 SWF extraction. The original game is by Shock Value; the historical [Newgrounds v1.01 submission](https://www.newgrounds.com/portal/view/218014) and asset provenance are documented in [REFERENCE.md](REFERENCE.md) and [rewrite/assets/README.md](rewrite/assets/README.md). This project is a partial native port, not a claim of complete 1:1 parity; see [rewrite/PARITY.md](rewrite/PARITY.md).
 
-<img width="1920" height="1080" alt="IB" src="https://github.com/user-attachments/assets/c30fede7-d884-4d08-9986-039958594c19" />
-
+<img width="1920" height="1032" alt="IB" src="https://github.com/user-attachments/assets/c6a9aad4-399b-4e3d-8be3-512aac90bcf0" />
 
 ## Run
 
