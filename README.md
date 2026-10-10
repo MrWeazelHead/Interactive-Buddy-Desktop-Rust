@@ -2,6 +2,9 @@
 
 A Rust/Bevy recreation based on the supplied local Interactive Buddy v1.02 SWF extraction. The original game is by Shock Value; the historical [Newgrounds v1.01 submission](https://www.newgrounds.com/portal/view/218014) and asset provenance are documented in [REFERENCE.md](REFERENCE.md) and [rewrite/assets/README.md](rewrite/assets/README.md). This project is a partial native port, not a claim of complete 1:1 parity; see [rewrite/PARITY.md](rewrite/PARITY.md).
 
+<img width="1920" height="1080" alt="IB" src="https://github.com/user-attachments/assets/c30fede7-d884-4d08-9986-039958594c19" />
+
+
 ## Run
 
 On Windows, double-click root **`Buddy.vbs`** during development to start the desktop overlay without a console window; it falls back to `run.cmd` when the built executable is absent. The package script creates `dist/Interactive Buddy/` with **`Interactive Buddy.exe`**, assets, **`Start Buddy.vbs`**, and a README. Double-click **`run.cmd`** when you want a console or command-line options. The default launch is desktop mode: Buddy floats above other windows and the native window-effects system can snapshot, shatter, and minimize windows after impacts. This is an opt-in interaction with windows on your desktop; use **Restore Windows** in File, either visible **Exit** button, or **Ctrl+Alt+Q** to quit and bring back windows minimized by the game. It does not close or kill windows.
