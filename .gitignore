@@ -1,5 +1,7 @@
 # Copyright-sensitive source and supplied materials
-rewrite/
+rewrite/assets/
+rewrite/target/
+rewrite/screenshots/
 source/
 decomp/
 assets/

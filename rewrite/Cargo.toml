@@ -1,0 +1,16 @@
+[package]
+name = "interactive-buddy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = ["2d", "default_font", "bevy_text", "bevy_audio", "wav", "mp3", "png", "multi_threaded"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+raw-window-handle = "0.6.2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
