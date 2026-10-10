@@ -1,0 +1,25 @@
+# Copyright-sensitive source and supplied materials
+rewrite/
+source/
+decomp/
+assets/
+dist/
+screenshots/
+*.swf
+*.fla
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.wav
+*.mp3
+*.ogg
+*.zip
+*.exe
+*.dll
+
+# Local/generated files
+**/target/
+**/buddy-save.json
+**/buddy-save.tmp
+.env
