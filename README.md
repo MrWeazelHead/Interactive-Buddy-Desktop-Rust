@@ -77,6 +77,9 @@ The catalog now has **69 items, 17 built-in skins and 23 modes**, plus your cust
 
 ### Passive Pet (optional)
 
+<img width="1920" height="1029" alt="petmode" src="https://github.com/user-attachments/assets/5960cf2c-7474-410f-baa2-c7dd938832f8" />
+
+
 The floating stat box is **off by default**, including old saves. Buddy instead asks for food, water, play, washing, medicine, sleep or a litter tray when needed, honoring the existing dialogue cooldown and notice priority. Tiny **2px need lights** below his mood face appear only for unmet needs: orange food, blue water, purple play, mint hygiene, red health, yellow energy and brown toilet. Mood itself still represents trust. **Settings > Passive Pet** independently toggles the opt-in **corner Stat panel**, **Need dialogue** and **Need lights**; the full numeric care overview remains in that settings page. Old `show_stats` settings reset once; new `stat_panel` choices persist normally.
 
 Open **Settings > Passive Pet** and turn it on. Food, water and play satisfaction fall while simulation runs; higher bars mean those needs are satisfied. Buddy walks to the corresponding care station below **45%**, uses it until **85%**, and refuses when already satisfied. Care stations and tools now live exclusively under **Items > Pet Items**, which is hidden unless Passive Pet is enabled. Select Food Bowl, Water Bowl, Toy Basket, Pet Bed or Litter Tray, close the menu, then left-click to place it on the floor. Clicking near an existing station refills it. Bowls/baskets have finite supplies; up to 16 care stations are saved in normal play. Stations are separate from loose physics toys.
