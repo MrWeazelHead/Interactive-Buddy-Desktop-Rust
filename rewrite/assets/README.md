@@ -1,0 +1,5 @@
+## Asset provenance
+
+These renderer assets are derived from the locally extracted Interactive Buddy v1.02 SWF. Run `python tools/prepare_assets.py` from the repository root to regenerate them from `decomp/game.xml`, the exported sprite PNGs, and WAV files. Skin textures are alpha-cropped and placed on a shared, symmetrically padded canvas per body part; each canvas midpoint is the registration point from the default skin frame, so sprites can be drawn centered at their physics position. `asset_manifest.json` records the source sprite/frame, crop bounds, offsets, and output dimensions. `room.png` is copied from the extracted room artwork, `arial.ttf` from Windows Arial, and sound filenames retain semantic names with numeric export prefixes removed.
+
+The original Buddy mood-face animation is copied frame-for-frame from root `faceClip` sprite 673 into `mood/1.png` through `mood/20.png`. The source placement uses scale 1.8333282 at stage position (30, 49); each extracted frame is 18×18 pixels before display scaling. The app does not yet render this animation.

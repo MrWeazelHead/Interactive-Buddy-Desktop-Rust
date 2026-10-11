@@ -23,11 +23,16 @@ pub struct WorkArea {
 pub struct Pointer {
     pub screen: IVec2,
     pub left_down: bool,
+    pub right_down: bool,
     pub shift_down: bool,
     pub ctrl_down: bool,
     pub alt_down: bool,
     pub quit_down: bool,
+    /// `P`, for the Ctrl+Alt+P mouse-passthrough hotkey.
+    pub passthrough_down: bool,
     pub escape_down: bool,
+    pub slot_down: [bool; 3],
+    pub step_down: bool,
 }
 
 impl WorkArea {
@@ -83,11 +88,19 @@ pub fn pointer() -> Option<Pointer> {
     Some(Pointer {
         screen,
         left_down: imp::mouse_down(),
+        right_down: imp::right_down(),
         shift_down: imp::key_down(0x10),
         ctrl_down: imp::key_down(0x11),
         alt_down: imp::key_down(0x12),
         quit_down: imp::key_down(0x51),
+        passthrough_down: imp::key_down(0x50),
         escape_down: imp::key_down(0x1b),
+        slot_down: [
+            imp::key_down(0x31),
+            imp::key_down(0x32),
+            imp::key_down(0x33),
+        ],
+        step_down: imp::key_down(0xbe),
     })
 }
 
@@ -344,6 +357,9 @@ mod imp {
 
     static TOOL_CAPTURE: AtomicBool = AtomicBool::new(false);
     static LEFT_DOWN: AtomicBool = AtomicBool::new(false);
+    static RIGHT_DOWN: AtomicBool = AtomicBool::new(false);
+    static RIGHT_CLICKED: AtomicBool = AtomicBool::new(false);
+    static BLOCKED_RIGHT: AtomicBool = AtomicBool::new(false);
     static BLOCKED_DOWN: AtomicBool = AtomicBool::new(false);
     static MOUSE_HOOK: AtomicIsize = AtomicIsize::new(0);
 
@@ -355,10 +371,20 @@ mod imp {
         }
     }
 
+    pub fn right_down() -> bool {
+        if MOUSE_HOOK.load(Ordering::Relaxed) != 0 {
+            let clicked = RIGHT_CLICKED.swap(false, Ordering::Relaxed);
+            RIGHT_DOWN.load(Ordering::Relaxed) || clicked
+        } else {
+            key_down(0x02)
+        }
+    }
+
     pub unsafe fn set_tool_capture(enabled: bool) {
         unsafe {
             if enabled && MOUSE_HOOK.load(Ordering::Relaxed) == 0 {
                 LEFT_DOWN.store(key_down(0x01), Ordering::Relaxed);
+                RIGHT_DOWN.store(key_down(0x02), Ordering::Relaxed);
                 let hook =
                     SetWindowsHookExW(14, Some(mouse_hook), GetModuleHandleW(core::ptr::null()), 0);
                 MOUSE_HOOK.store(hook as isize, Ordering::Relaxed);
@@ -386,6 +412,22 @@ mod imp {
                 armed
             } else {
                 BLOCKED_DOWN.swap(false, Ordering::Relaxed)
+            };
+            if blocked {
+                return 1;
+            }
+        }
+        if code >= 0 && matches!(message, 0x0204 | 0x0205) {
+            RIGHT_DOWN.store(message == 0x0204, Ordering::Relaxed);
+            if message == 0x0204 {
+                RIGHT_CLICKED.store(true, Ordering::Relaxed);
+            }
+            let blocked = if message == 0x0204 {
+                let armed = TOOL_CAPTURE.load(Ordering::Relaxed);
+                BLOCKED_RIGHT.store(armed, Ordering::Relaxed);
+                armed
+            } else {
+                BLOCKED_RIGHT.swap(false, Ordering::Relaxed)
             };
             if blocked {
                 return 1;

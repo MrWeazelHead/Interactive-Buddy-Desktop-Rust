@@ -1,6 +1,6 @@
 //! Desktop overlay input/capture system.
 
-use bevy::prelude::{Commands, Entity, Query, ResMut, Vec2, With};
+use bevy::prelude::{Commands, Entity, Local, Query, ResMut, Vec2, With};
 use bevy::window::{CursorOptions, PrimaryWindow, RawHandleWrapper};
 
 use crate::desktop;
@@ -30,6 +30,7 @@ pub fn update(
     _main_thread: bevy::ecs::system::NonSendMarker,
     mut commands: Commands,
     mut g: ResMut<Game>,
+    mut hotkeys: Local<[bool; 5]>,
     mut query: Query<(Entity, Option<&RawHandleWrapper>, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
     trace_window_test("host:update-enter");
@@ -51,6 +52,7 @@ pub fn update(
         }
         g.desktop_capture = false;
         g.desktop_raw_down = false;
+        g.desktop_raw_right = false;
         return;
     }
 
@@ -83,7 +85,7 @@ pub fn update(
         commands.entity(entity).remove::<RawHandleWrapper>();
     }
 
-    desktop::set_tool_capture(g.desktop_interact && !g.quit);
+    desktop::set_tool_capture(g.captures_desktop_tools());
     let Some(pointer) = desktop::pointer() else {
         cursor.hit_test = false;
         g.desktop_raw_down = false;
@@ -98,6 +100,28 @@ pub fn update(
         g.action(Action::Quit);
         return;
     }
+    // Ctrl+Alt+P has to stay reachable once the overlay is click-through,
+    // because that is the moment the menu can no longer be clicked.
+    let combo = pointer.ctrl_down && pointer.alt_down && !g.editing_preset && g.panel != "Script";
+    for (index, down) in pointer
+        .slot_down
+        .into_iter()
+        .chain([pointer.step_down, pointer.passthrough_down])
+        .enumerate()
+    {
+        let on = combo && down;
+        if on && !hotkeys[index] {
+            match index {
+                0..=2 => g.action(Action::UseSlot(index)),
+                3 => g.action(Action::Step),
+                _ => {
+                    let on = !g.save.mouse_passthrough;
+                    g.set_passthrough(on);
+                }
+            }
+        }
+        hotkeys[index] = on;
+    }
     let area = g.desktop_area.expect("desktop area initialized above");
     // The desktop stage is 2/3 of physical pixels; map the Win32 cursor into
     // that same game-space before Buddy/UI hit testing.
@@ -106,16 +130,13 @@ pub fn update(
     g.auto_aim = pointer.shift_down;
     g.head_aim = pointer.ctrl_down;
 
-    if pointer.escape_down {
-        let had_capture = g.desktop_capture;
-        g.desktop_interact = false;
-        g.panel.clear();
-        g.menu.clear();
-        g.category.clear();
-        g.desktop_capture = false;
-        g.pressed = false;
-        g.released = had_capture;
-        g.down = false;
+    let put_away = pointer.right_down && !g.desktop_raw_right;
+    g.desktop_raw_right = pointer.right_down;
+    if put_away {
+        g.action(Action::Hand);
+        g.desktop_raw_down = pointer.left_down;
+    } else if pointer.escape_down {
+        g.escape_desktop();
         g.desktop_raw_down = pointer.left_down;
     } else {
         let update = capture_update(
@@ -134,16 +155,21 @@ pub fn update(
     // Bevy/Winit implements this on Windows with the correct transparent and
     // layered styles; retain event capture while a press is being dragged.
     let native_hit = g.desktop_hit(local) || g.desktop_capture;
-    desktop::set_tool_capture(g.desktop_interact && !g.quit);
+    desktop::set_tool_capture(g.captures_desktop_tools());
     // Keep Winit's cached hit-test state stable; desktop input is polled
     // globally, and the native layered style below owns click-through toggles.
     cursor.hit_test = false;
     if let Some(raw) = g.desktop_handle {
-        desktop::update_overlay_input_style(raw as desktop::Hwnd, !native_hit);
+        // `mouse_passthrough` wins over the cursor: with it on, the window is
+        // transparent to the mouse everywhere, not just over empty space.
+        desktop::update_overlay_input_style(
+            raw as desktop::Hwnd,
+            g.save.mouse_passthrough || !native_hit,
+        );
     }
 
     if let Some(raw) = g.desktop_handle {
-        let wants_keyboard = g.panel == "Script";
+        let wants_keyboard = g.panel == "Script" || g.editing_preset;
         if wants_keyboard != g.desktop_keyboard {
             desktop::set_keyboard_input(raw as desktop::Hwnd, wants_keyboard);
             // Track the requested state even if Windows refuses foreground

@@ -1,22 +1,29 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+mod advanced;
 mod behavior;
+mod content;
 mod desktop;
 mod desktop_host;
 mod desktop_present;
 mod desktop_smoke;
 mod desktop_ui;
 mod desktop_windows;
+mod gameplay;
+mod item_art;
 mod objects;
+mod pet;
+mod pet_smoke;
 mod physics;
 mod script;
+mod skinmaker;
 
 use bevy::{audio::Volume, camera::ScalingMode, prelude::*, sprite::Anchor};
 use physics::Buddy;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 const W: f32 = 550.;
@@ -27,6 +34,39 @@ fn blast(delta: Vec2, power: f32) -> (f32, Vec2) {
     // atan2(0, 0) in Flash points right, unlike normalize_or_zero().
     let angle = delta.y.atan2(delta.x);
     (distance, Vec2::new(angle.cos(), angle.sin()) * magnitude)
+}
+
+/// Whether using a tool should close the open companion panel.
+///
+/// Only a real click dismisses it. `active` alone is not enough: the Fist and
+/// the Medieval Flail arm on hover, so the arena counts as active the whole
+/// time the pointer is anywhere over it. Clearing on that made an open panel
+/// vanish the instant the pointer left the rail to travel across the desktop
+/// to it, which made Items and Skins unreachable with those two equipped.
+/// How long a thrown explosive keeps ticking before it goes off, in seconds.
+/// Anything not listed never detonates on a timer.
+fn fuse_seconds(item: &str) -> f32 {
+    match item {
+        "Grenades" => 140. / 36.,
+        // A firecracker pops almost at once; a bomb takes its time.
+        "Firecracker" => 45. / 36.,
+        "Dynamite" | "Cherry Bombs" => 100. / 36.,
+        "Bomb" => 150. / 36.,
+        _ => f32::INFINITY,
+    }
+}
+
+/// Tools that are carried in the hand rather than thrown: they spawn one
+/// object, hold it, and put it away on release.
+fn is_special_tool(item: &str) -> bool {
+    matches!(
+        item,
+        "Radio" | "Gravity Shifter" | "Magical Orb" | "Telekinesis"
+    )
+}
+
+pub(crate) fn panel_dismissal(active: bool, pressed: bool) -> bool {
+    active && pressed
 }
 
 /// Find the first window crossed by a swept circular object and return a point
@@ -111,6 +151,25 @@ struct Save {
     motion_blur: String,
     emotion: f32,
     script_code: String,
+    /// Lower-left status readout in desktop mode.
+    #[serde(default = "default_true")]
+    show_overlay: bool,
+    /// Desktop mode only: the overlay stops taking clicks entirely.
+    #[serde(default)]
+    mouse_passthrough: bool,
+    dialogue: bool,
+    window_dialogue: bool,
+    idle_chatter: bool,
+    dialogue_interval: u32,
+    simulation_speed: f32,
+    favorites: HashSet<String>,
+    quick_slots: [Option<String>; 3],
+    presets: Vec<gameplay::Preset>,
+    pet: pet::Pet,
+    custom_skins: Vec<skinmaker::CustomSkin>,
+}
+fn default_true() -> bool {
+    true
 }
 fn default_quality() -> String {
     "High".into()
@@ -136,6 +195,18 @@ impl Default for Save {
             motion_blur: "None".into(),
             emotion: 0.,
             script_code: "addBuddyVel((275-getBuddyX())*0.075,(200-getBuddyY())*0.075)".into(),
+            show_overlay: true,
+            mouse_passthrough: false,
+            dialogue: true,
+            window_dialogue: true,
+            idle_chatter: true,
+            dialogue_interval: 16,
+            simulation_speed: 1.,
+            favorites: HashSet::new(),
+            quick_slots: [None, None, None],
+            presets: Vec::new(),
+            pet: pet::Pet::default(),
+            custom_skins: Vec::new(),
         }
     }
 }
@@ -145,6 +216,12 @@ enum Action {
     DesktopToggle,
     DesktopSection(String),
     DesktopInteract,
+    /// Lower-left status readout.
+    ToggleOverlay,
+    /// Stop the overlay taking any clicks.
+    TogglePassthrough,
+    /// Snap back to Open Hand and hand the desktop its clicks again.
+    Hand,
     Quit,
     RestoreWindows,
     Menu(String),
@@ -158,6 +235,22 @@ enum Action {
     Reset,
     ResetBuddy,
     ToggleSound,
+    ToggleDialogue,
+    ToggleWindowDialogue,
+    ClearToys,
+    ToggleFavorite,
+    AssignSlot(usize),
+    UseSlot(usize),
+    EditPresetName,
+    SavePreset,
+    LoadPreset(usize),
+    DeletePreset(usize),
+    ToggleIdleChatter,
+    Pet(String),
+    Skin(String, usize),
+    CycleDialogueInterval,
+    CycleSpeed,
+    Step,
     Setting(String, String),
     Pause,
     Panel(String),
@@ -208,6 +301,7 @@ struct Game {
     desktop_interact: bool,
     desktop_capture: bool,
     desktop_raw_down: bool,
+    desktop_raw_right: bool,
     desktop_area: Option<desktop::WorkArea>,
     desktop_handle: Option<usize>,
     desktop_keyboard: bool,
@@ -242,7 +336,20 @@ struct Game {
     burn: f32,
     message: String,
     message_time: f32,
+    /// Transient advisory notices (capacity limits). Kept separate from
+    /// `message` so a limit warning never overwrites a purchase or cheat result.
+    warn: String,
+    warn_time: f32,
     paused: bool,
+    step_once: bool,
+    preset_name: String,
+    editing_preset: bool,
+    skin_editor: skinmaker::Editor,
+    skin_revision: u64,
+    pet_target: Option<usize>,
+    pet_refusal: Option<usize>,
+    pet_status: String,
+    advanced: advanced::Advanced,
     sounds: Vec<String>,
     engine: script::Engine,
     code: String,
@@ -265,10 +372,47 @@ struct Game {
     unconscious: u16,
     shocked: bool,
     render_fps: f32,
+    dialogue_after: u64,
+    window_app: String,
+    window_candidate: String,
 }
+/// Items that act on Buddy alone and leave the desktop alone.
+///
+/// Everything else throws, fires or reaches across the room, so it needs
+/// clicks anywhere on screen and takes every one of them while equipped.
+pub(crate) const DESKTOP_SAFE_ITEMS: [&str; 3] = ["None", "Open Hand", "Tickle"];
+
+/// Why the desktop is not taking clicks right now, if it is not.
+///
+/// Shown to the player rather than left for them to infer: equipping a weapon
+/// silently disarms the desktop, and with it the menu, so a player who clicks
+/// their spreadsheet and watches nothing happen has no way to guess why.
+pub(crate) fn desktop_blocked_by(g: &Game) -> Option<&'static str> {
+    if !g.desktop || g.quit {
+        return None;
+    }
+    if g.save.mouse_passthrough {
+        return Some("passthrough is on");
+    }
+    if g.desktop_interact && !DESKTOP_SAFE_ITEMS.contains(&g.save.item.as_str()) {
+        return Some("weapon equipped");
+    }
+    None
+}
+
 impl Game {
     fn new() -> Self {
-        let catalog: Catalog =
+        // A smoke run drives the game hard for hundreds of frames and saves
+        // constantly; point it at a scratch file so it can never overwrite the
+        // player's real progress.
+        let automated = std::env::args()
+            .any(|a| a == "--demo" || a == "--smoke-test" || a == "--desktop-smoke-test");
+        if automated && std::env::var_os("IB_SAVE_PATH").is_none() {
+            // SAFETY: this runs once, before any other thread reads the
+            // environment, and the variable is only ever read afterwards.
+            unsafe { std::env::set_var("IB_SAVE_PATH", "smoke-save.json") };
+        }
+        let mut catalog: Catalog =
             serde_json::from_str(include_str!("../assets/catalog.json")).expect("catalog");
         let save_path = std::env::var_os("IB_SAVE_PATH")
             .map(PathBuf::from)
@@ -277,6 +421,14 @@ impl Game {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        save.pet.validate();
+        skinmaker::validate(&mut save.custom_skins);
+        catalog
+            .skins
+            .extend(save.custom_skins.iter().map(|s| s.entry()));
+        if save.skin.starts_with("custom_") && !catalog.skins.iter().any(|s| s.id == save.skin) {
+            save.skin = "default".into();
+        }
         for e in catalog
             .items
             .iter()
@@ -289,7 +441,9 @@ impl Game {
         }
         let demo = std::env::args()
             .any(|a| a == "--demo" || a == "--smoke-test" || a == "--desktop-smoke-test");
-        if demo {
+        let playtest = std::env::args()
+            .any(|a| a == "--playtest" || a == "--content-smoke-test" || a == "--pet-smoke-test");
+        if demo || playtest {
             for e in catalog
                 .items
                 .iter()
@@ -299,6 +453,13 @@ impl Game {
                 save.owned.insert(e.name.clone());
             }
             save.cash = 1000.;
+        }
+        if playtest {
+            save.item = "Open Hand".into();
+            save.modes.clear();
+            save.mouse_passthrough = false;
+            save.dialogue = true;
+            save.window_dialogue = true;
         }
         let emotion = save.emotion;
         let code = save.script_code.clone();
@@ -310,6 +471,7 @@ impl Game {
             desktop_interact: false,
             desktop_capture: false,
             desktop_raw_down: false,
+            desktop_raw_right: false,
             desktop_area: None,
             desktop_handle: None,
             desktop_keyboard: false,
@@ -344,14 +506,28 @@ impl Game {
             burn: 0.,
             message: String::new(),
             message_time: 0.,
+            warn: String::new(),
+            warn_time: 0.,
             paused: false,
+            step_once: false,
+            preset_name: "My preset".into(),
+            editing_preset: false,
+            skin_editor: skinmaker::Editor::default(),
+            skin_revision: 1,
+            pet_target: None,
+            pet_refusal: None,
+            pet_status: "Resting".into(),
+            advanced: advanced::Advanced::default(),
             sounds: vec![],
             engine: script::Engine::default(),
             code,
             every_frame: false,
             save_path,
             save_error: None,
-            demo,
+            demo: demo || playtest,
+            dialogue_after: 0,
+            window_app: String::new(),
+            window_candidate: String::new(),
             camera_offset: Vec2::ZERO,
             camera_scale: 1.,
             flail_pos: Vec2::new(275., 150.),
@@ -373,6 +549,7 @@ impl Game {
         self.save.modes.contains(id)
     }
     fn reset_buddy(&mut self) {
+        self.advanced = advanced::Advanced::default();
         self.buddy = Buddy::new();
         self.buddy.set_bounds(
             self.stage
@@ -393,12 +570,45 @@ impl Game {
         self.health = 100.;
         self.unconscious = 0;
     }
+    /// Turn whole-overlay click-through on or off.
+    ///
+    /// Turning it on hides the menu as well: leaving a clickable panel on
+    /// screen while the overlay claims to be transparent would be a lie. The
+    /// corner buttons stay clickable regardless, and Ctrl+Alt+P is the other
+    /// way back out, so this can never strand the player.
+    pub(crate) fn set_passthrough(&mut self, on: bool) {
+        self.save.mouse_passthrough = on;
+        if on {
+            self.desktop_open = false;
+            self.desktop_section.clear();
+            self.cancel_tool_input();
+        }
+        self.persist();
+    }
+    pub(crate) fn captures_desktop_tools(&self) -> bool {
+        self.desktop && self.desktop_interact && !self.save.mouse_passthrough && !self.quit
+    }
+    pub(crate) fn escape_desktop(&mut self) {
+        self.desktop_interact = false;
+        self.desktop_section.clear();
+        self.panel.clear();
+        self.menu.clear();
+        self.category.clear();
+        self.editing_preset = false;
+        self.cancel_tool_input();
+    }
     fn desktop_hit(&self, point: Vec2) -> bool {
         if point.x < 0. || point.y < 0. || point.x > self.stage.x || point.y > self.stage.y {
             return false;
         }
+        // Asked first because it decides for itself what stays live in
+        // passthrough mode; the blanket check below would otherwise lock out
+        // the very buttons that turn the mode off again.
         if desktop_ui::hit(self, point) {
             return true;
+        }
+        if self.save.mouse_passthrough {
+            return false;
         }
         if !self.panel.is_empty() {
             let origin = self.panel_origin();
@@ -428,16 +638,31 @@ impl Game {
             Vec2::ZERO
         }
     }
+    pub(crate) fn item_visible(&self, entry: &Entry) -> bool {
+        entry.category != "Pet Items" || self.save.pet.enabled
+    }
     fn entries(&self, kind: &str) -> Vec<Entry> {
         match kind {
             "Skins" => self.catalog.skins.clone(),
             "Modes" => self.catalog.modes.clone(),
-            _ => self.catalog.items.clone(),
+            _ => self
+                .catalog
+                .items
+                .iter()
+                .filter(|e| self.item_visible(e))
+                .cloned()
+                .collect(),
         }
     }
     fn notify(&mut self, s: impl Into<String>) {
         self.message = s.into();
         self.message_time = 3.;
+    }
+    /// Advisory notice about a silent limit. Deliberately a separate channel
+    /// from `notify`, which carries action results.
+    fn warn(&mut self, s: impl Into<String>) {
+        self.warn = s.into();
+        self.warn_time = 3.;
     }
     fn cash(&mut self, n: f64) {
         if n.is_finite() && n > 0. {
@@ -461,6 +686,10 @@ impl Game {
         if strength > 0.01 {
             self.save.hits += 1;
             self.emotion = (self.emotion - 0.4).max(-100.);
+            self.pet_damage(strength);
+            if strength > 2. {
+                self.say("Ouch! Maybe try the Bubble Wand?");
+            }
             if self.frame % 120 == 0 {
                 match self.save.skin.as_str() {
                     "nap" => self.sound("nd-ugh"),
@@ -469,17 +698,48 @@ impl Game {
                 }
             }
             if self.mode("gore") && strength > 2. {
-                for i in 0..5 {
-                    let a = i as f32 * 2.399 + self.frame as f32;
+                // The old spray was five specks of `r: 1.5`, drawn at 0.75-1.5
+                // pixels, drifting with no gravity and fading in place. The
+                // mode toggled, did spawn particles, and looked exactly like a
+                // broken feature: blood needs to be big enough to see, to fall,
+                // and to vary between droplets.
+                let away = if f.length() > 0.01 {
+                    f.normalize()
+                } else {
+                    Vec2::new(0., 1.)
+                };
+                for i in 0..9 {
+                    // Aim the spray along the incoming force but tilt it hard
+                    // downward, then fan it sideways. Offsetting only `y` left
+                    // the outermost droplets rising, because the sideways
+                    // spread could outweigh the bias.
+                    let dir = (away * 0.55 + Vec2::new(0., 0.9)).normalize_or_zero();
+                    let dir = (dir + dir.perp() * (i as f32 - 4.) * 0.12).normalize_or_zero();
+                    let speed = 1.4 + (i % 3) as f32 * 0.7;
+                    let life = 0.7 + (i % 4) as f32 * 0.16;
                     self.fx.push(Fx {
-                        pos: p,
-                        vel: Vec2::new(a.cos(), a.sin()) * 2.,
-                        life: 1.3,
-                        max: 1.3,
-                        r: 1.5,
-                        color: Color::srgb(0.55, 0.02, 0.01),
+                        pos: p + Vec2::new(0., -2.),
+                        vel: dir * speed,
+                        life,
+                        max: life,
+                        r: 2. + (i % 3) as f32 * 1.1,
+                        color: if i % 3 == 0 {
+                            Color::srgb(0.42, 0.01, 0.01)
+                        } else {
+                            Color::srgb(0.62, 0.03, 0.02)
+                        },
                     });
                 }
+                // A splat that stays where it landed, so the hit reads as a
+                // wound rather than as nine unrelated dots.
+                self.fx.push(Fx {
+                    pos: p,
+                    vel: Vec2::ZERO,
+                    life: 0.45,
+                    max: 0.45,
+                    r: 4.5,
+                    color: Color::srgb(0.35, 0.01, 0.01),
+                });
             }
         }
     }
@@ -579,7 +839,11 @@ impl Game {
         }
         // frame_25 explode(): the torso determines the shared Buddy velocity
         // and reward. A blast does not independently punch all six circles.
+        self.advanced_explosion(p, 200. * power);
         let (distance, velocity) = blast(self.buddy.parts[5].pos - p, power);
+        if distance <= 200. * power {
+            self.pet_damage(velocity.length());
+        }
         for part in &mut self.buddy.parts {
             part.prev -= velocity;
         }
@@ -675,11 +939,14 @@ impl Game {
                 age: 0,
                 window_hit: false,
             });
+        } else {
+            self.warn("Bullet limit reached (256)");
         }
     }
     fn advance_bullets(&mut self, gravity: f32) {
         self.bullet_lines.clear();
         // Original doBullets uses sixteen collision samples per game frame.
+        let mut damage = 0.;
         for bullet in &mut self.bullets {
             bullet.age += 1;
             for _ in 0..16 {
@@ -692,6 +959,7 @@ impl Game {
                     .iter()
                     .position(|p| p.pos.distance_squared(bullet.pos) < p.radius * p.radius);
                 if let Some(index) = part {
+                    damage += bullet.strength;
                     let shared = Vec2::new(bullet.velocity.x * 0.015, bullet.velocity.y * 0.02);
                     for p in &mut self.buddy.parts {
                         p.prev -= shared;
@@ -773,6 +1041,9 @@ impl Game {
                 }
             }
         }
+        if damage > 0. {
+            self.pet_damage(damage);
+        }
         self.bullets.retain(|b| b.ricochets >= 0 && b.age < 360);
     }
     fn collide_objects(&mut self) {
@@ -780,7 +1051,10 @@ impl Game {
         let mut emotion = 0.;
         let mut rewarded = false;
         for object in &mut self.objects {
-            if object.held || object.kind == "Missiles" || object.life <= 0. {
+            if object.held
+                || matches!(object.kind.as_str(), "Missiles" | "Bazooka Rocket")
+                || object.life <= 0.
+            {
                 continue;
             }
             let properties = objects::properties(&object.kind);
@@ -826,12 +1100,15 @@ impl Game {
         for i in 0..self.objects.len() {
             let (left, right) = self.objects.split_at_mut(i + 1);
             let a = &mut left[i];
-            if a.held || a.kind == "Missiles" || a.life <= 0. {
+            if a.held || matches!(a.kind.as_str(), "Missiles" | "Bazooka Rocket") || a.life <= 0. {
                 continue;
             }
             let ap = objects::properties(&a.kind);
             for b in right {
-                if b.held || b.kind == "Missiles" || b.life <= 0. {
+                if b.held
+                    || matches!(b.kind.as_str(), "Missiles" | "Bazooka Rocket")
+                    || b.life <= 0.
+                {
                     continue;
                 }
                 let bp = objects::properties(&b.kind);
@@ -856,6 +1133,9 @@ impl Game {
         }
         self.cash(reward);
         self.emotion = (self.emotion + emotion).clamp(-100., 100.);
+        if emotion < 0. {
+            self.pet_damage(-emotion);
+        }
         if rewarded {
             self.sound("punch1");
             self.save.hits += 1;
@@ -950,7 +1230,7 @@ impl Game {
                         child.arg("--desktop");
                     }
                     if self.demo {
-                        child.arg("--demo");
+                        child.arg("--playtest");
                     }
                     child.spawn()
                 });
@@ -960,6 +1240,14 @@ impl Game {
                 }
             }
             Action::DesktopToggle => {
+                // Clicking the menu button while clicks pass through means
+                // "I want the menu". Opening the rail and leaving every icon
+                // dead is not an answer to that, so passthrough is switched
+                // off first. Turning it off by hand in Settings still works
+                // for anyone who wants it.
+                if self.save.mouse_passthrough {
+                    self.set_passthrough(false);
+                }
                 self.desktop_open = !self.desktop_open;
                 self.panel.clear();
                 self.page = 0;
@@ -975,6 +1263,42 @@ impl Game {
                 self.panel.clear();
             }
             Action::DesktopInteract => self.desktop_interact = !self.desktop_interact,
+            Action::ToggleOverlay => {
+                self.save.show_overlay = !self.save.show_overlay;
+                self.persist();
+            }
+            Action::TogglePassthrough => self.set_passthrough(!self.save.mouse_passthrough),
+            a @ (Action::ToggleFavorite
+            | Action::AssignSlot(_)
+            | Action::UseSlot(_)
+            | Action::EditPresetName
+            | Action::SavePreset
+            | Action::LoadPreset(_)
+            | Action::DeletePreset(_)
+            | Action::ToggleIdleChatter
+            | Action::CycleDialogueInterval
+            | Action::CycleSpeed
+            | Action::Step) => self.gameplay_action(a),
+            Action::Pet(key) => self.pet_action(&key),
+            Action::Skin(key, value) => self.skin_action(&key, value),
+            Action::Hand => {
+                // The universal way out of "my desktop stopped working".
+                // Equipping a weapon swallows every click in the system, which
+                // includes the menu, so without this the only route back is a
+                // keybind the player has to be told about.
+                let had = self.save.item.clone();
+                self.cancel_tool_input();
+                self.save.item = "Open Hand".into();
+                if self.desktop {
+                    self.desktop_interact = false;
+                }
+                if had == "Open Hand" {
+                    self.notify("Open Hand — desktop clicks restored");
+                } else {
+                    self.notify(format!("{had} put away — desktop clicks restored"));
+                }
+                self.persist();
+            }
             Action::Quit => {
                 self.persist();
                 self.quit = true;
@@ -986,9 +1310,15 @@ impl Game {
                 } else {
                     self.menu = s;
                 }
+                self.page = 0;
                 self.category.clear();
             }
-            Action::Category(s) => self.category = s,
+            Action::Category(s) => {
+                if self.category != s {
+                    self.page = 0;
+                }
+                self.category = s;
+            }
             Action::Store(s) => {
                 self.panel = s;
                 self.page = 0;
@@ -997,6 +1327,34 @@ impl Game {
             }
             Action::Row(n) => self.row = Some(n),
             Action::Page(n) => {
+                if !self.desktop
+                    && self.panel.is_empty()
+                    && matches!(self.menu.as_str(), "Skins" | "Modes")
+                {
+                    let pages = self
+                        .entries(&self.menu)
+                        .iter()
+                        .filter(|e| self.save.owned.contains(&e.name))
+                        .count()
+                        .div_ceil(12)
+                        .max(1);
+                    self.page = ((self.page as i32 + n).max(0) as usize).min(pages - 1);
+                    return;
+                }
+                if !self.desktop && self.menu == "Items" && self.panel.is_empty() {
+                    let pages = self
+                        .catalog
+                        .items
+                        .iter()
+                        .filter(|e| {
+                            self.in_category(e, &self.category) && self.save.owned.contains(&e.name)
+                        })
+                        .count()
+                        .div_ceil(10)
+                        .max(1);
+                    self.page = ((self.page as i32 + n).max(0) as usize).min(pages - 1);
+                    return;
+                }
                 if self.desktop && self.panel.is_empty() {
                     let max = desktop_ui::page_count(self).saturating_sub(1);
                     self.page = ((self.page as i32 + n).max(0) as usize).min(max);
@@ -1005,7 +1363,7 @@ impl Game {
                 let max = self
                     .entries(&self.panel)
                     .len()
-                    .div_ceil(10)
+                    .div_ceil(9)
                     .saturating_sub(1);
                 self.page = ((self.page as i32 + n).max(0) as usize).min(max);
                 self.row = None;
@@ -1028,27 +1386,51 @@ impl Game {
             }
             Action::Select(kind, name) => {
                 if kind == "Items" {
+                    if self
+                        .catalog
+                        .items
+                        .iter()
+                        .any(|e| e.name == name && !self.item_visible(e))
+                    {
+                        self.notify("Enable Passive Pet to use Pet Items.");
+                        return;
+                    }
+                    self.cancel_tool_input();
                     if self.desktop {
-                        self.desktop_interact =
-                            !matches!(name.as_str(), "None" | "Open Hand" | "Tickle");
+                        self.desktop_interact = !DESKTOP_SAFE_ITEMS.contains(&name.as_str());
+                        // Say so when this is what just cost the player their
+                        // desktop, because the symptom (clicks going nowhere)
+                        // gives no hint of the cause.
+                        if self.desktop_interact {
+                            self.notify(format!(
+                                "{} equipped — right-click to put the tool away.",
+                                name
+                            ));
+                        }
                     }
                     self.save.item = name;
                 } else if kind == "Skins" {
                     if let Some(e) = self.catalog.skins.iter().find(|e| e.name == name) {
                         self.save.skin = e.id.clone();
+                        self.say(format!("New look! How do I look as {name}?"));
                     }
                 } else if let Some(e) = self.catalog.modes.iter().find(|e| e.name == name) {
                     let id = e.id.clone();
                     if id == "script" {
                         self.panel = "Script".into();
                     } else if !self.save.modes.remove(&id) {
-                        self.save.modes.insert(id);
+                        self.save.modes.insert(id.clone());
+                        if id == "party" {
+                            self.party_burst();
+                            self.notify("Party Time on! Close menu to dance.");
+                        }
                     }
                 }
                 self.menu.clear();
                 self.persist();
             }
             Action::Close => {
+                self.editing_preset = false;
                 self.panel.clear();
                 self.menu.clear();
                 self.persist();
@@ -1056,13 +1438,18 @@ impl Game {
             Action::Reset => {
                 let initial = Self::new();
                 self.save = Save::default();
+                self.catalog.skins.retain(|e| !e.id.starts_with("custom_"));
+                self.skin_editor = skinmaker::Editor::default();
+                self.skin_revision += 1;
+                self.pet_target = None;
+                self.pet_refusal = None;
                 self.save.owned = initial
                     .catalog
                     .items
                     .iter()
                     .chain(&initial.catalog.skins)
                     .chain(&initial.catalog.modes)
-                    .filter(|e| e.initially_owned)
+                    .filter(|e| e.initially_owned && !e.id.starts_with("custom_"))
                     .map(|e| e.name.clone())
                     .collect();
                 self.reset_buddy();
@@ -1080,6 +1467,27 @@ impl Game {
                 self.unconscious = 0;
                 self.menu.clear();
             }
+            Action::ClearToys => {
+                self.advanced = advanced::Advanced::default();
+                self.objects.clear();
+                self.bullets.clear();
+                self.bullet_lines.clear();
+                self.fx.clear();
+                self.save.pet.stations.clear();
+                self.pet_target = None;
+                self.burn = 0.;
+                self.notify("All toys and care stations cleared. Fresh start!");
+            }
+            Action::ToggleDialogue => {
+                self.save.dialogue = !self.save.dialogue;
+                self.persist();
+            }
+            Action::ToggleWindowDialogue => {
+                self.save.window_dialogue = !self.save.window_dialogue;
+                self.window_app.clear();
+                self.window_candidate.clear();
+                self.persist();
+            }
             Action::ToggleSound => {
                 self.save.sound = !self.save.sound;
                 self.menu.clear();
@@ -1095,10 +1503,12 @@ impl Game {
                 self.persist();
             }
             Action::Pause => {
+                self.step_once = false;
                 self.paused = !self.paused;
                 self.menu.clear();
             }
             Action::Panel(s) => {
+                self.editing_preset = false;
                 self.panel = s;
                 self.menu.clear();
             }
@@ -1237,6 +1647,11 @@ impl Game {
                                     age: 0,
                                     window_hit: false,
                                 });
+                            } else if [x, y, vx, vy, strength, ricochets]
+                                .iter()
+                                .all(|v| v.is_finite())
+                            {
+                                self.warn("Bullet limit reached (256)");
                             }
                         }
                         script::Effect::Sound(name) => self.sound(&name),
@@ -1248,11 +1663,15 @@ impl Game {
                 self.notify(e);
             }
         }
+        self.pet_cage_step();
     }
 }
 #[derive(Resource)]
 struct Art {
     font: Handle<Font>,
+    /// Heavier cut of the same family, used for headings and labels so the
+    /// interface has a weight hierarchy instead of one flat size everywhere.
+    font_bold: Handle<Font>,
     room: Handle<Image>,
     circle: Handle<Image>,
     skins: HashMap<String, Handle<Image>>,
@@ -1340,6 +1759,12 @@ fn main() {
                 })
                 .set(AssetPlugin {
                     file_path: assets_path.to_string_lossy().into_owned(),
+                    // `Deny` rather than the default `Forbid` so the interface
+                    // font can be opted into explicitly below. `Allow` would
+                    // hand every asset load in the app a free pass to read
+                    // anywhere on disk, which is more than loading two fonts
+                    // needs.
+                    unapproved_path_mode: bevy::asset::UnapprovedPathMode::Deny,
                     ..default()
                 }),
         )
@@ -1348,11 +1773,17 @@ fn main() {
         .add_systems(
             Update,
             (
+                gameplay::timing,
                 desktop_host::update,
                 input,
+                skinmaker::paint,
                 smoke_test,
+                content::smoke,
                 desktop_smoke::run,
                 sampling,
+                content::notice_timers,
+                skinmaker::sync_art,
+                pet_smoke::run,
                 draw,
                 desktop_present::update,
                 play_sounds,
@@ -1363,6 +1794,66 @@ fn main() {
         .add_systems(FixedUpdate, simulate)
         .run();
 }
+/// Load a system UI font, falling back to the bundled Arial.
+///
+/// Segoe UI is the modern Windows interface face and is present on every
+/// supported machine, but this project also builds for Linux and macOS, where
+/// that path does not exist. `AssetServer::load` on a missing file yields a
+/// font that renders nothing at all, so the file is checked first.
+fn ui_font(server: &AssetServer, name: &str) -> Handle<Font> {
+    match ui_font_path(name) {
+        Some(path) => {
+            // The system font directory sits outside the asset root, so this
+            // one load has to say so.
+            server
+                .load_builder()
+                .override_unapproved()
+                .load::<Font>(path)
+        }
+        None => server.load("arial.ttf"),
+    }
+}
+
+/// The system copy of `name`, if it exists and is a font file this can parse.
+fn ui_font_path(name: &str) -> Option<PathBuf> {
+    for directory in [
+        "C:/Windows/Fonts",
+        "/usr/share/fonts",
+        "/System/Library/Fonts",
+    ] {
+        let path = PathBuf::from(format!("{directory}/{name}"));
+        if is_font_file(&path) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// True when `path` starts with one of the sfnt signatures TrueType and
+/// OpenType use.
+///
+/// Worth the bytes: a directory entry called `segoeui.ttf` that is actually a
+/// stub, a redirect, or a truncated file would otherwise be handed to the font
+/// parser and leave the interface with no text in it, at runtime, with nothing
+/// in the log to say why.
+fn is_font_file(path: &Path) -> bool {
+    let Ok(mut head) = std::fs::read(path) else {
+        return false;
+    };
+    head.truncate(4);
+    matches!(
+        head.as_slice(),
+        // TrueType outlines, and the Apple collection container.
+        [0x00, 0x01, 0x00, 0x00]
+            | [b't', b't', b'c', b'f']
+            // 'OTTO': CFF outlines.
+            | [b'O', b'T', b'T', b'O']
+            // 'true' / 'typ1': classic Mac outlines, still seen on macOS.
+            | [b't', b'r', b'u', b'e']
+            | [b't', b'y', b'p', b'1']
+    )
+}
+
 fn setup(
     mut c: Commands,
     server: Res<AssetServer>,
@@ -1412,6 +1903,12 @@ fn setup(
     let mut skins = HashMap::new();
     for s in [
         "default",
+        "robot",
+        "cosmic",
+        "slime",
+        "neon",
+        "ice",
+        "ember",
         "teletubby",
         "pirate",
         "strawberry",
@@ -1466,6 +1963,44 @@ fn setup(
         }
     }
     for name in [
+        "beachball",
+        "anvil",
+        "bubblewand",
+        "repulsor",
+        "confetti",
+        "duck",
+        "icewand",
+        "sparkler",
+        "foodbowl",
+        "waterbowl",
+        "toybasket",
+        "petbed",
+        "featherwand",
+        "petbrush",
+        "portalgun",
+        "tractorbeam",
+        "launchpad",
+        "petcage",
+        "grapple",
+        "stasis",
+        "bazooka_launcher",
+        "bazooka_rocket",
+        "littertray",
+        "poopscoop",
+        "petsoap",
+        "petmedicine",
+        "poop",
+        "tomato",
+        "basketball",
+        "snowball",
+        "waterballoon",
+        "marble",
+        "cherrybomb",
+        "bomb",
+        "dynamite",
+        "firecracker",
+        "machinegun_custom",
+        "shotgun_custom",
         "fist",
         "grenade",
         "molotov",
@@ -1485,11 +2020,13 @@ fn setup(
         "flail_chain",
         "missile",
         "fireball",
+        "fireball_custom",
     ] {
         tool_art.insert(name.into(), server.load(format!("tools/{name}.png")));
     }
     c.insert_resource(Art {
-        font: server.load("arial.ttf"),
+        font: ui_font(&server, "segoeui.ttf"),
+        font_bold: ui_font(&server, "seguisb.ttf"),
         room: server.load("room.png"),
         circle: server.load("circle.png"),
         skins,
@@ -1508,6 +2045,10 @@ fn input(
     mut chars: MessageReader<bevy::input::keyboard::KeyboardInput>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if g.quit {
+        exit.write(AppExit::Success);
+        return;
+    }
     let Ok(w) = windows.single() else { return };
     if !g.desktop {
         if let Some(p) = w.cursor_position() {
@@ -1518,6 +2059,38 @@ fn input(
         g.head_aim = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
         g.pressed |= mouse.just_pressed(MouseButton::Left);
         g.released |= mouse.just_released(MouseButton::Left);
+    }
+    if g.editing_preset {
+        for event in chars.read().filter(|event| event.state.is_pressed()) {
+            match event.key_code {
+                KeyCode::Enter | KeyCode::Escape => {
+                    g.editing_preset = false;
+                }
+                KeyCode::Backspace => {
+                    if g.panel == "Skin Maker" {
+                        g.skin_editor.skin.name.pop();
+                    } else {
+                        g.preset_name.pop();
+                    }
+                }
+                _ => {
+                    if let Some(text) = &event.text {
+                        for ch in text.chars().filter(|ch| !ch.is_control()) {
+                            if g.panel == "Skin Maker" {
+                                if g.skin_editor.skin.name.chars().count() < 20 {
+                                    g.skin_editor.skin.name.push(ch);
+                                }
+                            } else if g.preset_name.chars().count() < 24 {
+                                g.preset_name.push(ch);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        g.pressed = false;
+        g.down = false;
+        return;
     }
     if g.panel != "Script" {
         for (key, ch) in [
@@ -1557,6 +2130,9 @@ fn input(
             }
         }
     }
+    if keys.just_pressed(KeyCode::KeyC) && g.panel != "Script" {
+        g.action(Action::ClearToys);
+    }
     if keys.just_pressed(KeyCode::Backspace) && g.panel != "Script" {
         let item = g.save.item.clone();
         g.objects.retain(|o| o.kind != item);
@@ -1566,11 +2142,41 @@ fn input(
         g.menu.clear();
         g.desktop_interact = false;
     }
-    if keys.just_pressed(KeyCode::KeyP) && g.panel != "Script" {
+    // Ctrl+Alt+P (or Ctrl+Alt+Shift+P) is the passthrough toggle advertised by
+    // the status line, so it has to exist. Without it, passthrough could only
+    // be left by editing buddy-save.json by hand. Checked before the plain
+    // `P` binding below so one keypress does not both pause and toggle.
+    let combo = keys.just_pressed(KeyCode::KeyP)
+        && (keys.pressed(KeyCode::ControlLeft)
+            || keys.pressed(KeyCode::ControlRight)
+            || keys.pressed(KeyCode::AltLeft)
+            || keys.pressed(KeyCode::AltRight));
+    if combo {
+        let next = !g.save.mouse_passthrough;
+        g.set_passthrough(next);
+    }
+    if keys.just_pressed(KeyCode::KeyP) && !combo && g.panel != "Script" {
         g.paused = !g.paused;
     }
     if keys.just_pressed(KeyCode::KeyR) && g.panel != "Script" {
         g.reset_buddy();
+    }
+    // Desktop right-click is polled globally by desktop_host, even without focus.
+    if !g.desktop && mouse.just_pressed(MouseButton::Right) {
+        g.action(Action::Hand);
+    }
+    if g.panel != "Script" && !g.desktop {
+        for (index, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3]
+            .into_iter()
+            .enumerate()
+        {
+            if keys.just_pressed(key) {
+                g.action(Action::UseSlot(index));
+            }
+        }
+        if keys.just_pressed(KeyCode::Period) {
+            g.action(Action::Step);
+        }
     }
     if g.panel == "Script" {
         for event in chars.read() {
@@ -1625,6 +2231,9 @@ fn input(
             .map(|h| h.action.clone())
         {
             if let Action::Category(s) = a {
+                if g.category != s {
+                    g.page = 0;
+                }
                 g.category = s;
             }
         }
@@ -1632,11 +2241,12 @@ fn input(
 }
 fn simulate(mut g: ResMut<Game>) {
     let stage = g.stage;
-    if g.paused || !g.panel.is_empty() || !g.menu.is_empty() {
+    if !g.step_once && (g.paused || !g.panel.is_empty() || !g.menu.is_empty()) {
         g.pressed = false;
         g.released = false;
         return;
     }
+    g.step_once = false;
     g.frame += 1;
     g.desktop_hit_cooldown = g.desktop_hit_cooldown.saturating_sub(1);
     g.unconscious = g.unconscious.saturating_sub(1);
@@ -1648,9 +2258,11 @@ fn simulate(mut g: ResMut<Game>) {
     g.buddy.is_clock = g.save.skin == "strawberry";
     g.emotion *= 0.99995;
     g.save.seconds += 1. / 36.;
-    g.message_time = (g.message_time - 1. / 36.).max(0.);
     g.cooldown -= 1;
-    let grav = if g.objects.iter().any(|o| o.kind == "Gravity Shifter") {
+    let grav = if g.mode("zerograv")
+        || g.mode("gravityCarousel")
+        || g.objects.iter().any(|o| o.kind == "Gravity Shifter")
+    {
         0.
     } else if g.mode("lowGrav") {
         g.save.gravity * 0.35
@@ -1673,7 +2285,7 @@ fn simulate(mut g: ResMut<Game>) {
             .map(|o| o.pos);
         let mouse = g.mouse;
         let game = &mut *g;
-        if game.buddy.awake {
+        if game.buddy.awake && (!game.save.pet.enabled || burn > 0. || grenade.is_some()) {
             game.behavior.step(
                 &mut game.buddy,
                 emotion,
@@ -1687,6 +2299,7 @@ fn simulate(mut g: ResMut<Game>) {
             game.cash(reward);
         }
     }
+    g.pet_step();
     g.buddy.step(grav, elastic);
     let impact_cash = g.buddy.impact_cash;
     g.cash(impact_cash);
@@ -1715,6 +2328,7 @@ fn simulate(mut g: ResMut<Game>) {
         g.camera_offset = Vec2::ZERO;
         g.camera_scale = 1.;
     }
+    g.content_step();
     let p = (g.mouse - center) / g.camera_scale + center - g.camera_offset;
     if g.pressed {
         g.throw_origin = p;
@@ -1742,13 +2356,37 @@ fn simulate(mut g: ResMut<Game>) {
         g.mouse.y > 23. && g.mouse.y < 383.
     };
     let active = (g.down || g.pressed || matches!(item.as_str(), "Fist" | "Medieval Flail"))
+        && g.panel.is_empty()
+        && g.menu.is_empty()
+        && (!g.desktop || !g.save.mouse_passthrough)
         && in_arena
         && (!g.desktop
             || g.desktop_interact
             || g.desktop_capture
             || g.buddy.nearest(g.mouse).is_some());
+    if !active {
+        g.advanced_cancel_pointer();
+    }
     if active {
+        // A click in the arena means the player wants to play, not browse:
+        // get the companion menu out of the way. It has to be the click, not
+        // the mere fact that the arena is active: with a Fist equipped the
+        // arena is active whenever the pointer is anywhere over it, so
+        // dismissing on activity closed the panel the instant the pointer
+        // left the rail on its way to it.
+        if panel_dismissal(active, g.pressed) && g.desktop && !g.desktop_section.is_empty() {
+            g.desktop_section.clear();
+        }
         match item.as_str() {
+            "Food Bowl" | "Water Bowl" | "Toy Basket" | "Pet Bed" | "Feather Wand"
+            | "Pet Brush" | "Litter Tray" | "Poop Scoop" | "Pet Soap" | "Pet Medicine"
+            | "Pet Cage" => g.pet_tool(&item, p),
+            "Portal Gun" | "Grappling Hook" | "Stasis Field" | "Tractor Beam" | "Launch Pad" => {
+                g.advanced_tool(&item, p)
+            }
+            "Bubble Wand" | "Repulsor" | "Confetti Cannon" | "Ice Wand" | "Sparkler" => {
+                g.content_tool(&item, p);
+            }
             "None" => {}
             "Open Hand" => {
                 if g.pressed {
@@ -1796,6 +2434,29 @@ fn simulate(mut g: ResMut<Game>) {
                     g.explode(p, 0.85);
                 }
             }
+            "Bazooka" => {
+                if g.pressed && g.cooldown <= 0 {
+                    if g.objects.len() >= 40 {
+                        g.warn("40 objects maximum. Clear toys first.");
+                    } else {
+                        let direction = g.direction.normalize_or_zero();
+                        let origin =
+                            (p + direction * 18.).clamp(Vec2::splat(12.), stage - Vec2::splat(12.));
+                        g.objects.push(Object {
+                            pos: origin,
+                            prev: origin - direction * 18.,
+                            r: 5.,
+                            kind: "Bazooka Rocket".into(),
+                            life: 3.,
+                            held: false,
+                            hit_timer: 0,
+                            window_hit_timer: 0,
+                        });
+                        g.cooldown = 24;
+                        g.sound("shotgunFire");
+                    }
+                }
+            }
             "Missiles" => {
                 if g.pressed {
                     let origin = Vec2::new(25. + ((g.frame * 137) % 500) as f32, -100.);
@@ -1812,7 +2473,7 @@ fn simulate(mut g: ResMut<Game>) {
                     });
                 }
             }
-            "Pistol" | "Shotgun" | "Machine Gun" => {
+            "Pistol" | "Shotgun" | "Machine Gun" | "Crossbow" | "Nail Gun" => {
                 if (item == "Machine Gun" && g.cooldown <= 0)
                     || (item != "Machine Gun" && g.pressed)
                 {
@@ -1830,11 +2491,37 @@ fn simulate(mut g: ResMut<Game>) {
                     g.cooldown = 5;
                 }
             }
-            "Stun Gun" => {
+            "Stun Gun" | "Lightning" => {
                 g.shock(p);
                 g.window_hit(p, 0.75);
             }
-            "Wide Nozzle Hose" | "Narrow Nozzle Hose" | "Fire Hose" | "Flamethrower" => {
+            "Healing Wave" => {
+                if g.pressed {
+                    if g.burn > 0. || g.emotion < 100. {
+                        g.cash(20.);
+                    }
+                    g.burn = 0.;
+                    g.emotion = (g.emotion + 12.).min(100.);
+                }
+                // A slow ring, so the effect reads as a pulse rather than a
+                // single-frame flash.
+                if g.frame % 8 == 0 {
+                    let t = g.frame as f32;
+                    for i in 0..6 {
+                        let a = t * 0.06 + i as f32 * std::f32::consts::TAU / 6.;
+                        g.fx.push(Fx {
+                            pos: p + Vec2::new(a.cos(), a.sin()) * (t % 48.),
+                            vel: Vec2::new(a.cos(), a.sin()) * 1.4,
+                            life: 0.5,
+                            max: 0.5,
+                            r: 2.,
+                            color: Color::srgb(0.4, 0.95, 0.65),
+                        });
+                    }
+                }
+            }
+            "Wide Nozzle Hose" | "Narrow Nozzle Hose" | "Fire Hose" | "Flamethrower" | "Soap"
+            | "Fire Extinguisher" => {
                 let fire = item == "Flamethrower";
                 let shock = item == "Stun Gun";
                 let direction = if shock {
@@ -1863,6 +2550,12 @@ fn simulate(mut g: ResMut<Game>) {
                         g.cash(18.);
                     }
                     g.burn = 5.;
+                } else if item == "Fire Extinguisher" {
+                    // The one tool that puts Buddy out rather than on fire.
+                    if g.burn > 0. && g.frame % 6 == 0 {
+                        g.cash(12.);
+                    }
+                    g.burn = 0.;
                 } else if !shock && !fire {
                     g.burn = (g.burn - 0.15).max(0.);
                     g.emotion = (g.emotion + 0.03).min(100.);
@@ -1891,7 +2584,7 @@ fn simulate(mut g: ResMut<Game>) {
                 }
             }
             _ => {
-                let special = matches!(item.as_str(), "Radio" | "Gravity Shifter" | "Magical Orb");
+                let special = is_special_tool(&item);
                 if g.pressed && special {
                     if let Some(o) = g.objects.iter_mut().find(|o| o.kind == item) {
                         o.held = true;
@@ -1904,18 +2597,11 @@ fn simulate(mut g: ResMut<Game>) {
                     if !special
                         && g.objects
                             .iter()
-                            .filter(|o| {
-                                !matches!(
-                                    o.kind.as_str(),
-                                    "Radio" | "Gravity Shifter" | "Magical Orb"
-                                )
-                            })
+                            .filter(|o| !is_special_tool(&o.kind))
                             .count()
                             >= 6
                     {
-                        if let Some(i) = g.objects.iter().position(|o| {
-                            !matches!(o.kind.as_str(), "Radio" | "Gravity Shifter" | "Magical Orb")
-                        }) {
+                        if let Some(i) = g.objects.iter().position(|o| !is_special_tool(&o.kind)) {
                             g.objects.remove(i);
                         }
                     }
@@ -1925,15 +2611,15 @@ fn simulate(mut g: ResMut<Game>) {
                         prev: p,
                         r,
                         kind: item.clone(),
-                        life: if item == "Grenades" {
-                            140. / 36.
-                        } else {
-                            f32::INFINITY
-                        },
+                        life: fuse_seconds(&item),
                         held: true,
                         hit_timer: 0,
                         window_hit_timer: 0,
                     });
+                } else if g.pressed && !special {
+                    // The oldest throwable is recycled at six; forty is a hard
+                    // stop, so say so rather than silently dropping input.
+                    g.warn("Object limit reached (40)");
                 }
             }
         }
@@ -1972,6 +2658,7 @@ fn simulate(mut g: ResMut<Game>) {
         Vec::new()
     };
     let mut window_hits = Vec::new();
+    let super_bounce = g.mode("superbounce");
     for o in &mut g.objects {
         o.hit_timer = (o.hit_timer - 1).max(0);
         o.window_hit_timer = (o.window_hit_timer - 1).max(0);
@@ -1983,12 +2670,14 @@ fn simulate(mut g: ResMut<Game>) {
                 o.held = false;
             }
         } else {
-            if o.kind == "Missiles" {
+            if matches!(o.kind.as_str(), "Missiles" | "Bazooka Rocket") {
+                o.life -= 1. / 36.;
                 let v = o.pos - o.prev;
-                let mut collided = false;
+                let mut collided = o.life <= 0.;
                 for _ in 0..8 {
                     o.pos += v / 8.;
                     if o.pos.y > stage.y - 10.
+                        || (o.kind == "Bazooka Rocket" && o.pos.y < 10.)
                         || o.pos.x < 10.
                         || o.pos.x > stage.x - 10.
                         || body_positions
@@ -2002,12 +2691,26 @@ fn simulate(mut g: ResMut<Game>) {
                 o.prev = o.pos - v;
                 if collided {
                     o.life = -1.;
-                    explosions.push((o.pos, 0.85));
+                    explosions.push((
+                        o.pos,
+                        if o.kind == "Bazooka Rocket" {
+                            1.3
+                        } else {
+                            0.85
+                        },
+                    ));
                 }
                 continue;
             }
             let properties = objects::properties(&o.kind);
-            let (bounce, friction) = (properties.bounce, properties.friction);
+            let (bounce, friction) = (
+                if super_bounce {
+                    0.98
+                } else {
+                    properties.bounce
+                },
+                properties.friction,
+            );
             let old_pos = o.pos;
             let v = o.pos - o.prev;
             o.prev = o.pos;
@@ -2059,7 +2762,17 @@ fn simulate(mut g: ResMut<Game>) {
                     }
                 }
             }
-            if matches!(o.kind.as_str(), "Grenades" | "Missiles" | "Mines") && o.life <= 0. {
+            if matches!(
+                o.kind.as_str(),
+                "Grenades"
+                    | "Missiles"
+                    | "Mines"
+                    | "Firecracker"
+                    | "Dynamite"
+                    | "Cherry Bombs"
+                    | "Bomb"
+            ) && o.life <= 0.
+            {
                 explosions.push((o.pos, if o.kind == "Grenades" { 0.7 } else { 0.75 }));
             }
             if desktop
@@ -2124,6 +2837,8 @@ fn simulate(mut g: ResMut<Game>) {
         g.explode(p, s);
     }
     g.objects.retain(|o| o.life > 0.);
+    g.advanced_step();
+    g.pet_cage_step();
     if g.burn > 0. {
         g.burn -= 1. / 36.;
         let bp = g.buddy.parts[5].pos;
@@ -2234,98 +2949,287 @@ impl Painter<'_, '_, '_> {
         self.image(p, Vec2::splat(r * 2.), self.art.circle.clone(), color);
     }
     fn text(&mut self, x: f32, y: f32, s: impl Into<String>, size: f32, color: Color) {
+        self.label(x, y, s, size, color, Anchor::TOP_LEFT, false);
+    }
+    /// Same as `text`, but anchored so `x, y` is the centre of the string.
+    /// Used for glyphs drawn on top of a round dot.
+    fn text_centered(&mut self, x: f32, y: f32, s: impl Into<String>, size: f32, color: Color) {
+        self.label(x, y, s, size, color, Anchor::CENTER, false);
+    }
+    /// The heavier cut of the interface face, for headings and row labels.
+    fn text_bold(&mut self, x: f32, y: f32, s: impl Into<String>, size: f32, color: Color) {
+        self.label(x, y, s, size, color, Anchor::TOP_LEFT, true);
+    }
+    fn label(
+        &mut self,
+        x: f32,
+        y: f32,
+        s: impl Into<String>,
+        size: f32,
+        color: Color,
+        anchor: Anchor,
+        bold: bool,
+    ) {
         self.c.spawn((
             Drawn,
             Text2d::new(s),
             TextFont {
-                font: self.art.font.clone().into(),
+                font: if bold {
+                    self.art.font_bold.clone().into()
+                } else {
+                    self.art.font.clone().into()
+                },
                 font_size: bevy::text::FontSize::Px(size),
                 ..default()
             },
             TextColor(color),
-            Anchor::TOP_LEFT,
+            anchor,
             Transform::from_translation(world(self.view(Vec2::new(x, y)), self.z))
                 .with_scale(Vec3::splat(self.scale)),
         ));
         self.z += 0.001;
+    }
+    /// Flat surface button: a quiet rest state, an accent fill on hover.
+    /// A store line: item name on the left, state on the right. The state is a
+    /// fixed-width chip rather than right-aligned text so no text measuring is
+    /// needed.
+    fn store_row(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        name: &str,
+        h: f32,
+        owned: bool,
+        price: f64,
+        selected: bool,
+        index: usize,
+    ) {
+        let center = Vec2::new(x + w * 0.5, y + h * 0.5);
+        let hover = (self.mouse - self.view(center))
+            .abs()
+            .cmple(Vec2::new(w * 0.5, h * 0.5))
+            .all();
+        self.rect(
+            x,
+            y,
+            w,
+            h,
+            if selected {
+                ui::ACCENT
+            } else {
+                ui::SURFACE_RAISED
+            },
+        );
+        if hover && !selected {
+            self.rect(x, y, w, h, ui::RAISED);
+        }
+        let name_color = if selected { Color::WHITE } else { ui::TEXT };
+        self.text_bold(x + 12., y + (h - 12.) * 0.5, name, 12., name_color);
+        // Chip: owned reads as a quiet green, otherwise the price.
+        let chip = if owned {
+            (ui::SUCCESS_DIM, "Owned".to_string(), ui::SUCCESS)
+        } else {
+            (ui::SURFACE, format!("${price}"), ui::MUTED)
+        };
+        self.rect(x + w - 66., y + (h - 17.) * 0.5, 54., 17., chip.0);
+        self.text_centered(x + w - 39., y + h * 0.5 - 4., chip.1, 10., chip.2);
+        self.hits.push(Hit {
+            pos: self.view(center),
+            size: Vec2::new(w, h) * self.scale,
+            action: Action::Row(index),
+        });
     }
     fn button(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, a: Action) {
         let hover = (self.mouse - self.view(Vec2::new(x + w * 0.5, y + h * 0.5)))
             .abs()
             .cmple(Vec2::new(w, h) * 0.5)
             .all();
-        self.rect(x, y, w, h, Color::srgb(0.25, 0.27, 0.25));
+        self.rect(x, y, w, h, if hover { ui::RAISED_HI } else { ui::RAISED });
         self.rect(
-            x + 1.,
-            y + 1.,
-            w - 2.,
-            h - 2.,
-            if hover {
-                Color::srgb(0.87, 0.89, 0.87)
-            } else {
-                Color::srgb(0.78, 0.79, 0.78)
-            },
+            x,
+            y + h - 1.,
+            w,
+            1.,
+            if hover { ui::ACCENT } else { ui::HAIRLINE },
         );
-        self.text(x + 5., y + 4., label, 11., Color::BLACK);
+        self.text_bold(
+            x + 5.,
+            y + (h - ui::LINE) * 0.5,
+            label,
+            ui::BODY,
+            if hover { ui::TEXT } else { ui::MUTED },
+        );
         self.hits.push(Hit {
             pos: self.view(Vec2::new(x + w * 0.5, y + h * 0.5)),
             size: Vec2::new(w, h) * self.scale,
             action: a,
         });
     }
-    fn row(&mut self, x: f32, y: f32, w: f32, label: &str, a: Action, selected: bool) {
-        let hover = (self.mouse - self.view(Vec2::new(x + w * 0.5, y + 10.)))
+    /// The primary action in a panel: filled accent, so there is exactly one
+    /// thing the eye lands on first.
+    fn primary(&mut self, x: f32, y: f32, w: f32, h: f32, label: &str, a: Action) {
+        let hover = (self.mouse - self.view(Vec2::new(x + w * 0.5, y + h * 0.5)))
             .abs()
-            .cmple(Vec2::new(w * 0.5, 10.))
+            .cmple(Vec2::new(w, h) * 0.5)
             .all();
+        self.rect(x, y, w, h, if hover { ui::ACCENT_HI } else { ui::ACCENT });
+        self.text_bold(
+            x + (w - label.chars().count() as f32 * ui::BODY * 0.55) * 0.5,
+            y + (h - ui::LINE) * 0.5,
+            label,
+            ui::BODY,
+            Color::WHITE,
+        );
+        self.hits.push(Hit {
+            pos: self.view(Vec2::new(x + w * 0.5, y + h * 0.5)),
+            size: Vec2::new(w, h) * self.scale,
+            action: a,
+        });
+    }
+    /// List row: name on the left, and an optional chip on the right for the
+    /// price or the owned state. The chip is a fixed-width plate rather than
+    /// measured text, so nothing depends on font metrics.
+    fn row(&mut self, x: f32, y: f32, w: f32, label: &str, a: Action, selected: bool) {
+        self.row_chip(x, y, w, label, a, selected, None)
+    }
+    fn row_chip(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        label: &str,
+        a: Action,
+        selected: bool,
+        chip: Option<(String, bool)>,
+    ) {
+        let hover = (self.mouse - self.view(Vec2::new(x + w * 0.5, y + ui::ROW * 0.5)))
+            .abs()
+            .cmple(Vec2::new(w * 0.5, ui::ROW * 0.5))
+            .all();
+        let lit = hover || selected;
         self.rect(
             x,
             y,
             w,
-            20.,
-            if hover || selected {
-                Color::srgb(0.25, 0.36, 0.49)
-            } else {
-                Color::srgb(0.91, 0.92, 0.91)
-            },
+            ui::ROW,
+            if lit { ui::ACCENT } else { ui::SURFACE_RAISED },
         );
-        self.text(
+        self.text_bold(
             x + 8.,
-            y + 3.,
+            y + (ui::ROW - ui::LINE) * 0.5,
             label,
-            11.,
-            if hover || selected {
-                Color::WHITE
-            } else {
-                Color::BLACK
-            },
+            ui::BODY,
+            if lit { Color::WHITE } else { ui::TEXT },
         );
+        if let Some((text, owned)) = chip {
+            let cw = 52.;
+            let cx = x + w - cw - 4.;
+            let cy = y + (ui::ROW - ui::CHIP) * 0.5;
+            self.rect(
+                cx,
+                cy,
+                cw,
+                ui::CHIP,
+                if owned {
+                    ui::SUCCESS.with_alpha(0.16)
+                } else {
+                    ui::HAIRLINE.with_alpha(0.55)
+                },
+            );
+            self.text_centered(
+                cx + cw * 0.5,
+                cy + (ui::CHIP - ui::LINE) * 0.5,
+                text,
+                ui::SMALL,
+                if owned { ui::SUCCESS } else { ui::MUTED },
+            );
+        }
         self.hits.push(Hit {
-            pos: self.view(Vec2::new(x + w * 0.5, y + 10.)),
-            size: Vec2::new(w, 20.) * self.scale,
+            pos: self.view(Vec2::new(x + w * 0.5, y + ui::ROW * 0.5)),
+            size: Vec2::new(w, ui::ROW) * self.scale,
             action: a,
         });
     }
+    /// One-pixel divider used to separate regions of a panel.
+    fn rule(&mut self, x: f32, y: f32, w: f32) {
+        self.rect(x, y, w, 1., ui::HAIRLINE);
+    }
 }
+
+/// Interface palette shared by the classic panels and the desktop rail.
+///
+/// They were drawn separately and drifted apart; both read from here now so a
+/// surface change lands everywhere at once.
+pub(crate) mod ui {
+    use bevy::prelude::Color;
+    /// Window and panel background.
+    pub const SURFACE: Color = Color::srgba(0.078, 0.090, 0.118, 0.98);
+    /// Resting row, one step above the surface.
+    pub const SURFACE_RAISED: Color = Color::srgb(0.129, 0.145, 0.180);
+    /// Resting button.
+    pub const RAISED: Color = Color::srgb(0.165, 0.184, 0.227);
+    /// Hovered button.
+    pub const RAISED_HI: Color = Color::srgb(0.208, 0.239, 0.306);
+    /// Hairlines and dividers.
+    pub const HAIRLINE: Color = Color::srgb(0.204, 0.227, 0.278);
+    /// Accent: selection, primary buttons.
+    pub const ACCENT: Color = Color::srgb(0.157, 0.412, 0.878);
+    pub const ACCENT_HI: Color = Color::srgb(0.235, 0.510, 0.949);
+    /// Owned state.
+    pub const SUCCESS: Color = Color::srgb(0.290, 0.788, 0.470);
+    /// Primary text.
+    pub const TEXT: Color = Color::srgb(0.898, 0.918, 0.945);
+    /// Secondary text.
+    pub const MUTED: Color = Color::srgb(0.565, 0.612, 0.678);
+    /// Body text size.
+    pub const BODY: f32 = 11.;
+    /// Small text size, for chips and hints.
+    pub const SMALL: f32 = 9.;
+    /// Row height.
+    pub const ROW: f32 = 20.;
+    /// Chip height.
+    pub const CHIP: f32 = 13.;
+    /// Dark green behind the owned chip; `SUCCESS` is far too bright to use
+    /// as a fill.
+    pub const SUCCESS_DIM: Color = Color::srgb(0.086, 0.176, 0.129);
+    /// Assumed line box for vertical centring; slightly taller than the glyph
+    /// so text sits optically centred rather than mathematically centred.
+    pub const LINE: f32 = 13.;
+}
+
 fn draw_panel(d: &mut Painter<'_, '_, '_>, g: &Game) {
     match g.panel.as_str() {
         "Items" | "Skins" | "Modes" => {
             let entries = g.entries(&g.panel);
-            let pages = entries.len().div_ceil(10);
+            let pages = entries.len().div_ceil(9);
             let page = g.page.min(pages.saturating_sub(1));
-            for (i, e) in entries.iter().enumerate().skip(page * 10).take(10) {
-                let label = format!(
-                    "{}   {}",
-                    if g.save.owned.contains(&e.name) { "[owned]".into() } else { format!("${:0.0}", e.price) },
-                    e.name
-                );
-                d.row(96., 85. + (i - page * 10) as f32 * 21., 358., &label, Action::Row(i), g.row == Some(i));
+            let selected = entries.get(g.row.unwrap_or(usize::MAX));
+            for (i, e) in entries.iter().enumerate().skip(page * 9).take(9) {
+                let y = 96. + (i - page * 9) as f32 * 23.;
+                let owned = g.save.owned.contains(&e.name);
+                let highlighted = g.row == Some(i);
+                d.store_row(96., y, 358., &e.name, 22., owned, e.price, highlighted, i);
             }
-            d.text(100., 300., format!("Cash: ${:0.2}", g.save.cash), 11., Color::BLACK);
-            d.button(96., 323., 28., 21., "<", Action::Page(-1));
-            d.text(132., 328., format!("{} / {}", page + 1, pages), 11., Color::BLACK);
-            d.button(185., 323., 28., 21., ">", Action::Page(1));
-            d.button(307., 323., 147., 21., "Buy Selected Item", Action::Buy);
+            // Footer: balance, paging, and the one button that matters.
+            d.rule(96., 305., 358.);
+            d.text(98., 316., "Balance", 11., ui::MUTED);
+            d.text_bold(98., 328., format!("${:0.2}", g.save.cash), 14., ui::TEXT);
+            d.button(230., 316., 24., 22., "‹", Action::Page(-1));
+            d.text_centered(266., 322., format!("{} / {}", page + 1, pages), 11., ui::MUTED);
+            d.button(278., 316., 24., 22., "›", Action::Page(1));
+            let affordable = selected.is_some_and(|e| !g.save.owned.contains(&e.name) && g.save.cash >= e.price);
+            d.primary(316., 314., 138., 26., "Buy", Action::Buy);
+            if !affordable {
+                if let Some(e) = selected {
+                    let reason = if g.save.owned.contains(&e.name) {
+                        "Already owned"
+                    } else {
+                        "Not enough cash"
+                    };
+                    d.text_centered(385., 342., reason, 10., ui::MUTED);
+                }
+            }
         }
         "Stats" => d.text(105., 95., format!("Money earned: ${:0.2}\n\nCurrent money: ${:0.2}\n\nInteractions: {}\n\nTime playing: {:0.0} seconds\n\nItems owned: {}", g.save.earned, g.save.cash, g.save.hits, g.save.seconds, g.save.owned.len()), 13., Color::BLACK),
         "Clear File" => {
@@ -2333,12 +3237,11 @@ fn draw_panel(d: &mut Painter<'_, '_, '_>, g: &Game) {
             d.button(200., 270., 80., 24., "Reset", Action::Reset);
             d.button(300., 270., 80., 24., "Cancel", Action::Close);
         }
-        "Physics" => {
-            d.text(105., 100., format!("Gravity: {:0.2}\n\nOriginal simulation rate: 36 frames / second", g.save.gravity), 13., Color::BLACK);
-            d.button(110., 180., 85., 24., "Low", Action::Gravity(0.15));
-            d.button(220., 180., 85., 24., "Normal", Action::Gravity(1.));
-            d.button(330., 180., 85., 24., "Reverse", Action::Gravity(-1.));
-        }
+        "Physics" => gameplay::draw_physics(d, g),
+        "Loadout" => gameplay::draw_loadout(d, g),
+        "Dialogue" => gameplay::draw_dialogue(d, g),
+        "Passive Pet" => pet::draw_panel(d, g),
+        "Skin Maker" => skinmaker::draw_panel(d, g),
         "Script" => {
             d.text(100., 85., "ShockScript — type to edit; Backspace deletes", 11., Color::BLACK);
             d.rect(97., 105., 357., 166., Color::srgb(0.96, 0.97, 0.95));
@@ -2364,24 +3267,152 @@ fn draw_modal(d: &mut Painter<'_, '_, '_>, g: &Game) {
     }
     d.z = if g.desktop { 800. } else { 200. };
     d.offset = g.panel_origin();
-    d.rect(85., 52., 380., 302., Color::srgb(0.19, 0.22, 0.2));
-    d.rect(87., 54., 376., 298., Color::srgb(0.83, 0.84, 0.82));
-    d.rect(88., 55., 374., 23., Color::srgb(0.3, 0.4, 0.35));
-    d.text(
-        95.,
-        60.,
+    // Hairline card over a dimmed scrim: the shadow reads as depth without a
+    // blurred drop shadow, which this renderer cannot do cheaply.
+    d.rect(80., 47., 390., 312., Color::srgba(0.02, 0.03, 0.04, 0.55));
+    d.rect(85., 52., 380., 302., ui::HAIRLINE);
+    d.rect(86., 53., 378., 300., ui::SURFACE);
+    // Header: title, hairline rule, and a quiet close button.
+    d.rect(86., 53., 378., 34., ui::SURFACE_RAISED);
+    d.text_bold(
+        98.,
+        62.,
         if matches!(g.panel.as_str(), "Items" | "Skins" | "Modes") {
-            format!("Buy New {}", g.panel)
+            format!("{}  ·  Store", g.panel)
         } else {
             g.panel.clone()
         },
-        12.,
-        Color::WHITE,
+        14.,
+        ui::TEXT,
     );
-    d.button(440., 57., 19., 18., "x", Action::Close);
+    d.rule(86., 87., 378.);
+    d.rect(441., 58., 18., 18., ui::RAISED);
+    d.text_centered(450., 67., "×", 13., ui::MUTED);
+    d.hits.push(Hit {
+        pos: d.view(Vec2::new(450., 67.)),
+        size: Vec2::splat(18.) * d.scale,
+        action: Action::Close,
+    });
     draw_panel(d, g);
     d.offset = Vec2::ZERO;
 }
+/// Draw Buddy's mood face. `art.mood` holds the twenty frames copied from
+/// source sprite 673; the index tracks `emotion` in `[-100, 100]`.
+fn mood_face(
+    d: &mut Painter<'_, '_, '_>,
+    art: &Art,
+    emotion: f32,
+    at: Vec2,
+    scale: f32,
+    alpha: f32,
+    z: f32,
+) {
+    if art.mood.is_empty() {
+        return;
+    }
+    let n = ((emotion * 0.1 + 10.).ceil() as i32).clamp(1, 20) as usize - 1;
+    d.c.spawn((
+        Drawn,
+        Sprite {
+            image: art.mood[n].clone(),
+            color: Color::WHITE.with_alpha(alpha),
+            ..default()
+        },
+        Transform::from_translation(world(at, z)).with_scale(Vec3::splat(scale)),
+    ));
+}
+
+/// Draw `text` in a translucent plate above `anchor`, clamped inside `stage`.
+/// Shorten to `limit` characters, cutting on a word boundary.
+///
+/// Cutting at a fixed character count sliced messages mid-word, so "Press H
+/// for Open Hand." came out as "Pr" — the one part of the message that told
+/// the player what to do.
+fn ellipsize(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(limit.saturating_sub(1)).collect();
+    match kept.rfind(' ') {
+        // No space to cut on, which means one very long unbroken token. Cutting
+        // back to the first character instead would throw away the whole word.
+        None => format!("{kept}…"),
+        Some(cut) => format!("{}…", kept[..cut].trim_end()),
+    }
+}
+
+/// Draw a speech plate directly above `anchor` and return its top edge, so a
+/// second plate can stack on top of it. `anchor` is in the desktop overlay's
+/// screen-style coordinates, where `y` grows downward.
+fn bubble(d: &mut Painter<'_, '_, '_>, text: &str, anchor: Vec2, ink: Color, stage: Vec2) -> f32 {
+    let text = ellipsize(text, 48);
+    let width = (28. + text.chars().count() as f32 * 5.4).clamp(96., 300.);
+    let height = 22.;
+    let x = (anchor.x - width * 0.5).clamp(4., (stage.x - width - 4.).max(4.));
+    let y = (anchor.y - 10. - height).max(4.);
+    d.rect(x, y, width, height, Color::srgba(0.10, 0.13, 0.11, 0.88));
+    d.text(x + 6., y + 5., text.as_str(), 11., ink);
+    y
+}
+
+/// Notice bubbles: warnings, messages, and the save-failure line.
+///
+/// Both modes draw these in Buddy's speech bubble. There used to be a separate
+/// banner across the top of the screen as well, which meant every notice
+/// appeared twice at the same moment, and the banner was the only notice the
+/// classic room ever showed — the bubble was desktop-only, so removing it
+/// there would have left the windowed build silent.
+fn draw_notices(d: &mut Painter<'_, '_, '_>, g: &Game) {
+    if g.message_time <= 0. && g.warn_time <= 0. && g.save_error.is_none() {
+        return;
+    }
+    // Above the shop card and the rail panel, so a purchase confirmation is
+    // not buried behind the shop you just bought from.
+    d.z = 900.;
+    let stage = g.stage;
+    // In the desktop overlay the camera is zoomed and panned, so Buddy's
+    // projected head is where the plates belong. In the classic room the
+    // camera is identity and this reduces to his first joint's position.
+    let head = g
+        .buddy
+        .parts
+        .first()
+        .map_or(Vec2::new(stage.x * 0.5, stage.y * 0.5), |p| {
+            (p.pos + g.camera_offset - stage * 0.5) * g.camera_scale + stage * 0.5
+        });
+    // Both plates stack upward from Buddy's head, the warning on top, so
+    // neither ever covers him or runs off the top of the work area.
+    let mut top = head.y;
+    if g.warn_time > 0. {
+        top = bubble(
+            d,
+            &g.warn,
+            Vec2::new(head.x, top),
+            Color::srgb(1., 0.62, 0.32),
+            stage,
+        ) - 2.;
+    }
+    if g.message_time > 0. {
+        bubble(
+            d,
+            &g.message,
+            Vec2::new(head.x, top),
+            Color::srgb(0.90, 0.94, 0.90),
+            stage,
+        );
+    }
+    if g.save_error.is_some() {
+        d.text(
+            6.,
+            6.,
+            "Save failed - see file permissions",
+            10.,
+            Color::srgb(1., 0.6, 0.3),
+        );
+    }
+    d.z = 0.;
+}
+
 fn draw(
     mut c: Commands,
     old: Query<Entity, With<Drawn>>,
@@ -2433,6 +3464,8 @@ fn draw(
             Color::srgba(0.05, 0.08, 0.05, 0.2),
         );
     }
+    pet::draw_world(&mut d, &g);
+    advanced::draw_world(&mut d, &g);
     d.z = 5.;
     for i in [5, 3, 4, 1, 2, 0] {
         let p = &g.buddy.parts[i];
@@ -2466,26 +3499,12 @@ fn draw(
         }
     }
     for o in &g.objects {
-        let key = match o.kind.as_str() {
-            "Grenades" => "grenade",
-            "Molotov Cocktails" => "molotov",
-            "Mines" => "mine",
-            "Baseballs" | "baseball" => "baseball",
-            "Bowling Balls" | "bowlball" => "bowlball",
-            "Rubber Balls" => "rubberball",
-            "Infants" => "infant",
-            "Radio" => "radio",
-            "Magical Orb" => "orb",
-            "Gravity Shifter" => "vortex",
-            "Missiles" => "missile",
-            "Fireballs" | "fireball" => "fireball",
-            _ => "",
-        };
+        let key = item_art::object_key(&o.kind);
         if let Some(h) = art.tools.get(key) {
             d.native(
                 o.pos,
                 h.clone(),
-                if key == "missile" {
+                if matches!(key, "missile" | "bazooka_rocket") {
                     let v = o.pos - o.prev;
                     v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2
                 } else {
@@ -2501,7 +3520,15 @@ fn draw(
             "Molotov Cocktails" => Color::srgb(0.35, 0.25, 0.1),
             "Missiles" => Color::srgb(0.4, 0.42, 0.4),
             "Fireballs" | "fireball" => Color::srgb(1., 0.4, 0.02),
-            "Magical Orb" => Color::srgb(0.4, 0.7, 1.),
+            "Magical Orb" | "Telekinesis" => Color::srgb(0.4, 0.7, 1.),
+            "Basketballs" => Color::srgb(0.85, 0.45, 0.15),
+            "Tomatoes" => Color::srgb(0.85, 0.25, 0.2),
+            "Snowballs" => Color::srgb(0.93, 0.96, 1.),
+            "Water Balloons" => Color::srgb(0.35, 0.65, 0.95),
+            "Marbles" => Color::srgb(0.55, 0.85, 0.9),
+            "Dynamite" | "Firecracker" => Color::srgb(0.65, 0.2, 0.18),
+            "Bomb" => Color::srgb(0.1, 0.1, 0.12),
+            "Cherry Bombs" => Color::srgb(0.8, 0.2, 0.35),
             "Gravity Shifter" => Color::srgb(0.4, 0.1, 0.6),
             "Radio" => Color::srgb(0.22, 0.23, 0.25),
             "Infants" => Color::srgb(0.85, 0.7, 0.55),
@@ -2552,18 +3579,23 @@ fn draw(
         let center = g.stage * 0.5;
         let cursor = (g.mouse - center) / g.camera_scale + center - g.camera_offset;
         match g.save.item.as_str() {
+            "Bubble Wand" | "Repulsor" | "Confetti Cannon" | "Ice Wand" | "Sparkler"
+            | "Portal Gun" | "Grappling Hook" | "Stasis Field" | "Tractor Beam" | "Launch Pad"
+            | "Food Bowl" | "Water Bowl" | "Toy Basket" | "Pet Bed" | "Litter Tray"
+            | "Poop Scoop" | "Pet Soap" | "Pet Medicine" | "Feather Wand" | "Pet Brush"
+            | "Pet Cage" => {
+                if let Some(h) = content::tool_art(&g.save.item).and_then(|key| art.tools.get(key))
+                {
+                    d.native(cursor, h.clone(), g.direction.y.atan2(g.direction.x));
+                }
+            }
             "Fist" => {
                 if let Some(h) = art.tools.get("fist") {
                     d.native(cursor, h.clone(), 0.);
                 }
             }
-            "Pistol" | "Shotgun" | "Machine Gun" | "Stun Gun" => {
-                let key = match g.save.item.as_str() {
-                    "Pistol" => "pistol",
-                    "Shotgun" => "shotgun",
-                    "Machine Gun" => "machineGun",
-                    _ => "stunGun",
-                };
+            "Pistol" | "Shotgun" | "Machine Gun" | "Stun Gun" | "Bazooka" => {
+                let key = item_art::gun_key(&g.save.item);
                 let v = g.direction;
                 if g.save.item != "Stun Gun" {
                     d.line(cursor, cursor + v * 600., 1., Color::srgba(1., 0., 0., 0.2));
@@ -2600,30 +3632,58 @@ fn draw(
     d.offset = Vec2::ZERO;
     d.scale = 1.;
     d.quantize = false;
+    pet::draw_status(&mut d, &g);
+    if g.mode("party") {
+        let head = g.buddy.parts[0].pos;
+        let at = (head + g.camera_offset - g.stage * 0.5) * g.camera_scale + g.stage * 0.5;
+        d.text(
+            at.x + 24.,
+            at.y - 32.,
+            "PARTY!",
+            11.,
+            Color::srgb(1., 0.5, 0.85),
+        );
+    }
     if g.desktop {
         if std::env::args().any(|arg| arg == "--window-effects-test") {
             d.rect(130., 130., 20., 20., Color::srgb(1., 0., 0.));
         }
+        if !art.mood.is_empty() {
+            // Beside his head in the desktop view, where he roams the screen.
+            let head = g.buddy.parts.first().map_or(g.stage * 0.5, |p| {
+                (p.pos + g.camera_offset - g.stage * 0.5) * g.camera_scale + g.stage * 0.5
+            });
+            mood_face(
+                &mut d,
+                &art,
+                g.emotion,
+                head + Vec2::new(-34., 0.),
+                1.1,
+                0.55,
+                100.,
+            );
+            pet::draw_need_lights(&mut d, &g, head + Vec2::new(-34., 0.));
+        }
+        draw_notices(&mut d, &g);
         desktop_ui::draw(&mut d, &g);
         draw_modal(&mut d, &g);
         g.hits = d.hits;
         return;
     }
     if !art.mood.is_empty() {
-        let n = ((g.emotion * 0.1 + 10.).ceil() as i32).clamp(1, 20) as usize - 1;
-        d.c.spawn((
-            Drawn,
-            Sprite {
-                image: art.mood[n].clone(),
-                color: Color::WHITE.with_alpha(0.5),
-                ..default()
-            },
-            Transform::from_translation(world(Vec2::new(30., 49.), 100.))
-                .with_scale(Vec3::splat(1.8333)),
-        ));
+        mood_face(
+            &mut d,
+            &art,
+            g.emotion,
+            Vec2::new(30., 49.),
+            1.8333,
+            0.5,
+            100.,
+        );
+        pet::draw_need_lights(&mut d, &g, Vec2::new(30., 49.));
     }
-    d.rect(0., 0., W, 22., Color::srgb(0.8, 0.82, 0.8));
-    d.rect(0., 21., W, 1., Color::srgb(0.25, 0.28, 0.25));
+    d.rect(0., 0., W, 22., ui::SURFACE_RAISED);
+    d.rule(0., 21., W);
     let menus = [
         ("File", 0., 36.),
         ("Skins", 36., 42.),
@@ -2656,10 +3716,6 @@ fn draw(
     if g.paused {
         d.text(244., 180., "PAUSED", 16., Color::WHITE);
     }
-    if g.message_time > 0. {
-        d.rect(120., 40., 310., 30., Color::srgba(0.12, 0.17, 0.12, 0.9));
-        d.text(130., 48., &g.message, 11., Color::WHITE);
-    }
     if g.save_error.is_some() {
         d.text(
             290.,
@@ -2679,6 +3735,7 @@ fn draw(
         match kind.as_str() {
             "Items" => {
                 let cats = [
+                    "Pet Items",
                     "Explosives",
                     "God Powers",
                     "Guns",
@@ -2686,13 +3743,14 @@ fn draw(
                     "Miscellaneous",
                     "Objects",
                     "Special",
+                    "Favorites",
                 ];
                 let mut cy = 23.;
                 for cat in cats {
                     if g.catalog
                         .items
                         .iter()
-                        .any(|e| e.category == cat && g.save.owned.contains(&e.name))
+                        .any(|e| g.in_category(e, cat) && g.save.owned.contains(&e.name))
                     {
                         d.row(
                             x,
@@ -2704,12 +3762,15 @@ fn draw(
                         );
                         if g.category == cat {
                             let mut sy = cy;
-                            for e in g
+                            let entries: Vec<_> = g
                                 .catalog
                                 .items
                                 .iter()
-                                .filter(|e| e.category == cat && g.save.owned.contains(&e.name))
-                            {
+                                .filter(|e| g.in_category(e, cat) && g.save.owned.contains(&e.name))
+                                .collect();
+                            let pages = entries.len().div_ceil(10).max(1);
+                            let page = g.page.min(pages - 1);
+                            for e in entries.into_iter().skip(page * 10).take(10) {
                                 d.row(
                                     x + 161.,
                                     sy,
@@ -2719,6 +3780,10 @@ fn draw(
                                     g.save.item == e.name,
                                 );
                                 sy += 20.;
+                            }
+                            if pages > 1 {
+                                d.row(x + 161., sy, 87., "< Previous", Action::Page(-1), false);
+                                d.row(x + 251., sy, 87., "Next >", Action::Page(1), false);
                             }
                         }
                         cy += 20.;
@@ -2735,11 +3800,14 @@ fn draw(
                 );
             }
             "Skins" | "Modes" => {
-                for e in g
-                    .entries(&kind)
+                let entries = g.entries(&kind);
+                let owned = entries
                     .iter()
                     .filter(|e| g.save.owned.contains(&e.name))
-                {
+                    .collect::<Vec<_>>();
+                let pages = owned.len().div_ceil(12).max(1);
+                let page = g.page.min(pages - 1);
+                for e in owned.iter().skip(page * 12).take(12) {
                     let selected = if kind == "Skins" {
                         g.save.skin == e.id
                     } else {
@@ -2755,6 +3823,29 @@ fn draw(
                     );
                     y += 20.;
                 }
+                if pages > 1 {
+                    d.button(x, y, 34., 20., "<", Action::Page(-1));
+                    d.text(
+                        x + 43.,
+                        y + 3.,
+                        format!("{} / {}", page + 1, pages),
+                        11.,
+                        ui::TEXT,
+                    );
+                    d.button(x + 120., y, 34., 20., ">", Action::Page(1));
+                    y += 20.;
+                }
+                if kind == "Skins" {
+                    d.row(
+                        x,
+                        y,
+                        205.,
+                        "Skin Maker...",
+                        Action::Panel("Skin Maker".into()),
+                        false,
+                    );
+                    y += 20.;
+                }
                 d.row(
                     x,
                     y,
@@ -2766,6 +3857,8 @@ fn draw(
             }
             "File" => {
                 for (label, action) in [
+                    ("Loadout / Favorites...", Action::Panel("Loadout".into())),
+                    ("Clear toys    C", Action::ClearToys),
                     ("Stats...", Action::Panel("Stats".into())),
                     ("Clear File...", Action::Panel("Clear File".into())),
                     ("Reset Buddy", Action::ResetBuddy),
@@ -2776,6 +3869,33 @@ fn draw(
                 }
             }
             "Settings" => {
+                for (label, on, action) in [
+                    ("Buddy dialogue", g.save.dialogue, Action::ToggleDialogue),
+                    (
+                        "Window comments",
+                        g.save.window_dialogue,
+                        Action::ToggleWindowDialogue,
+                    ),
+                ] {
+                    d.row(
+                        x,
+                        y,
+                        200.,
+                        &format!("{label}: {}", if on { "On" } else { "Off" }),
+                        action,
+                        on,
+                    );
+                    y += 20.;
+                }
+                d.row(
+                    x,
+                    y,
+                    200.,
+                    "Dialogue options...",
+                    Action::Panel("Dialogue".into()),
+                    false,
+                );
+                y += 20.;
                 d.row(
                     x,
                     y,
@@ -2785,6 +3905,13 @@ fn draw(
                     false,
                 );
                 y += 20.;
+                for (label, panel) in [
+                    ("Passive Pet...", "Passive Pet"),
+                    ("Skin Maker...", "Skin Maker"),
+                ] {
+                    d.row(x, y, 200., label, Action::Panel(panel.into()), false);
+                    y += 20.;
+                }
                 for key in ["Anti-Aliasing", "Effects", "Motion Blur"] {
                     let value = match key {
                         "Anti-Aliasing" => &g.save.anti_aliasing,
@@ -2851,6 +3978,7 @@ fn draw(
         }
     }
     draw_modal(&mut d, &g);
+    draw_notices(&mut d, &g);
     g.hits = d.hits;
 }
 fn play_sounds(
@@ -2931,15 +4059,32 @@ fn smoke_test(
     let shot = match *frame {
         120 => Some("01-room"),
         150 => {
-            g.save.owned.remove("Molotov Cocktails");
             g.action(Action::Store("Items".into()));
+            // Demo mode starts with the whole catalog owned, and `Buy`
+            // correctly refuses something you already have. Un-own whichever
+            // entry is fifth rather than a fixed name, so the store test keeps
+            // testing a real purchase as rows are added.
+            let fifth = g
+                .entries("Items")
+                .get(5)
+                .map(|e| e.name.clone())
+                .expect("the Items store has a fifth row");
+            g.save.owned.remove(&fifth);
             g.action(Action::Row(5));
             Some("02-shop")
         }
         180 => {
+            // Look the price up rather than hardcoding it: adding items to the
+            // catalog shifts every row below the new ones, and this assertion
+            // is about the money moving, not about which row sits fifth.
+            let price = g
+                .entries("Items")
+                .get(5)
+                .map(|e| e.price)
+                .expect("the Items store has a fifth row");
             let before = g.save.cash;
             g.action(Action::Buy);
-            assert_eq!(g.save.cash, before - 60.);
+            assert_eq!(g.save.cash, before - price);
             g.action(Action::Close);
             g.action(Action::Menu("Items".into()));
             g.action(Action::Category("Guns".into()));
@@ -2990,7 +4135,242 @@ fn smoke_test(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn blood_and_gore_bleeds_visibly() {
+        // The mode used to work exactly as coded and still looked dead: five
+        // droplets of `r: 1.5`, which the renderer draws at 0.75-1.5 pixels.
+        // This pins down that a hard hit produces droplets you could actually
+        // see, travelling downward, and leaves a splat behind.
+        let mut g = game();
+        g.action(Action::Select("Modes".into(), "Blood and Gore".into()));
+        assert!(g.mode("gore"), "Blood and Gore did not toggle on");
+        let before = g.fx.len();
+        let torso = g.buddy.parts[5].pos;
+        g.hit(torso, Vec2::new(6., -0.7), 40.);
+        let blood: Vec<(f32, Vec2)> = g.fx[before..]
+            .iter()
+            .filter(|f| f.r > 0. && f.color != Color::srgb(1., 0.4, 0.05))
+            .map(|f| (f.r, f.vel))
+            .collect();
+        assert!(blood.len() >= 10, "only {} droplets spawned", blood.len());
+        for (r, vel) in blood.iter().filter(|(_, vel)| vel.length() > 0.01) {
+            assert!(*r >= 2., "a droplet of r {r} is under a pixel across");
+            assert!(vel.y > 0., "blood should fall, not rise: {vel:?}");
+        }
+        assert!(
+            g.fx[before..]
+                .iter()
+                .any(|f| f.vel == Vec2::ZERO && f.r >= 4.),
+            "the hit left no splat"
+        );
+        // With the mode off, the same hit must stay clean.
+        let mut clean = game();
+        assert!(!clean.mode("gore"));
+        let before = clean.fx.len();
+        clean.hit(torso, Vec2::new(6., -0.7), 40.);
+        assert_eq!(clean.fx.len(), before, "blood without the mode enabled");
+    }
+
     use super::*;
+
+    /// The bundled fallback must be a real font, or every machine without the
+    /// system font ends up with no text anywhere.
+    #[test]
+    fn ui_font_never_falls_back_to_nothing() {
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/arial.ttf");
+        assert!(
+            is_font_file(&bundled),
+            "assets/arial.ttf is missing or is not a font file"
+        );
+        assert_eq!(
+            ui_font_path("this-font-does-not-exist-anywhere.ttf"),
+            None,
+            "a name that is installed nowhere must fall back to the bundle"
+        );
+    }
+
+    /// The modern faces, where they exist, must be genuine font files: handing
+    /// the asset server something it cannot parse produces a blank interface
+    /// rather than an error.
+    #[test]
+    fn ui_font_picks_a_parseable_system_face() {
+        for name in ["segoeui.ttf", "seguisb.ttf"] {
+            if let Some(path) = ui_font_path(name) {
+                assert!(
+                    is_font_file(&path),
+                    "{} exists but does not start with a font signature",
+                    path.display()
+                );
+            }
+        }
+    }
+    /// The real click gate, not just the menu's own hit test.
+    ///
+    /// `desktop_hit` had its own blanket `return false` for passthrough, so a
+    /// passing test on `desktop_ui::hit` would have proved nothing about the
+    /// path a click actually takes. This goes through `desktop_hit` in every
+    /// combination and insists the menu can always be opened again.
+    #[test]
+    fn the_menu_button_stays_clickable_in_every_mode() {
+        for passthrough in [false, true] {
+            for open in [false, true] {
+                for section in ["", "Items", "Settings"] {
+                    let mut g = game();
+                    g.desktop = true;
+                    g.save.mouse_passthrough = passthrough;
+                    g.desktop_open = open;
+                    g.desktop_section = section.into();
+                    let menu = desktop_ui::menu_center(&g);
+                    assert!(
+                        g.desktop_hit(menu),
+                        "menu unreachable through desktop_hit with \
+                         passthrough={passthrough} open={open} section={section:?}"
+                    );
+                    // The Buddy must still let clicks through underneath.
+                    let stage_middle = g.stage * 0.5;
+                    assert!(
+                        !g.desktop_hit(stage_middle),
+                        "passthrough={passthrough}: the room swallowed a click \
+                         meant for the desktop"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Turning passthrough off must leave the menu usable, since that is the
+    /// only escape hatch from the mode.
+    #[test]
+    fn turning_passthrough_off_restores_the_menu() {
+        let mut g = game();
+        g.desktop = true;
+        g.set_passthrough(true);
+        assert!(g.save.mouse_passthrough);
+        assert!(
+            !g.desktop_open,
+            "the menu should hide while clicks pass through"
+        );
+        assert!(g.desktop_hit(desktop_ui::menu_center(&g)));
+        g.set_passthrough(false);
+        assert!(g.desktop_hit(desktop_ui::menu_center(&g)));
+    }
+
+    /// Clicking the menu button must leave a menu you can actually use.
+    ///
+    /// Keeping the corner buttons clickable in passthrough was not enough on its
+    /// own: the button only opened the rail, so every icon in it stayed dead and
+    /// the player was still stuck, just one click further in. This drives the real
+    /// action rather than the hit test, because that is the path a click takes.
+    #[test]
+    fn opening_the_menu_from_passthrough_restores_the_icons() {
+        let mut g = game();
+        g.desktop = true;
+        g.set_passthrough(true);
+        g.action(Action::DesktopToggle);
+        assert!(
+            !g.save.mouse_passthrough,
+            "opening the menu must switch click-through back off"
+        );
+        assert!(
+            g.desktop_open,
+            "the rail must be open after clicking the menu"
+        );
+        // Every section icon has to be live, or the menu is a dead end again.
+        for index in 0..desktop_ui::SECTIONS.len() {
+            let center = desktop_ui::rail_center(&g, index);
+            assert!(
+                g.desktop_hit(center),
+                "section {index} is still dead after opening the menu"
+            );
+        }
+    }
+
+    /// The weapon-locks-the-desktop trap, and the way out of it.
+    ///
+    /// Equipping a weapon arms capture, which swallows every click in the system.
+    /// That includes the menu, so the player loses the menu too. The H keybind has
+    /// to restore the desktop without going anywhere near the UI.
+    #[test]
+    fn putting_away_tools_always_restores_the_desktop() {
+        for item in [
+            "Pistol",
+            "Bazooka",
+            "Flamethrower",
+            "Crossbow",
+            "Machine Gun",
+            "Water Balloons",
+        ] {
+            let mut g = game();
+            g.desktop = true;
+            g.action(Action::Select("Items".into(), item.into()));
+            assert!(
+                g.desktop_interact,
+                "{item} should take the desktop's clicks while equipped"
+            );
+            assert_eq!(
+                desktop_blocked_by(&g),
+                Some("weapon equipped"),
+                "{item} should say why the desktop went quiet"
+            );
+            assert!(
+                g.message.contains("right-click"),
+                "equipping {item} must say how to get the desktop back"
+            );
+            g.action(Action::Hand);
+            assert_eq!(g.save.item, "Open Hand");
+            assert!(
+                !g.desktop_interact,
+                "Open Hand must hand the desktop its clicks back"
+            );
+            assert_eq!(
+                desktop_blocked_by(&g),
+                None,
+                "nothing should be blocking the desktop after putting a tool away"
+            );
+        }
+    }
+
+    /// The safe items must never take the desktop's clicks in the first place.
+    #[test]
+    fn hands_leave_the_desktop_alone() {
+        for item in DESKTOP_SAFE_ITEMS {
+            let mut g = game();
+            g.desktop = true;
+            g.action(Action::Select("Items".into(), item.into()));
+            assert!(!g.desktop_interact, "{item} should not arm capture");
+            assert_eq!(desktop_blocked_by(&g), None);
+        }
+    }
+
+    /// A speech plate must never slice a message mid-word.
+    #[test]
+    fn bubbles_truncate_on_a_word_boundary() {
+        let long = "Bazooka equipped - desktop clicks are paused. Press H for Open Hand.";
+        assert!(
+            long.chars().count() > 48,
+            "the fixture must exceed the limit"
+        );
+        let short = ellipsize(long, 48);
+        assert!(
+            short.chars().count() <= 48,
+            "truncated text is still too long: {short:?}"
+        );
+        assert!(short.ends_with('…'), "a cut message must say so: {short:?}");
+        // Every surviving word must be a real word from the original, and the
+        // instruction at the end must not be mangled.
+        for word in short.trim_end_matches('…').split_whitespace() {
+            assert!(long.contains(word), "truncation invented the word {word:?}");
+        }
+        // Short messages are left exactly as they are.
+        assert_eq!(ellipsize("Open Hand", 48), "Open Hand");
+        assert_eq!(ellipsize("", 48), "");
+        // A single very long word cannot be cut on a boundary, so it is cut
+        // hard rather than dropped whole.
+        let solid = "x".repeat(60);
+        assert_eq!(ellipsize(&solid, 48).chars().count(), 48);
+    }
+
     fn game() -> Game {
         let mut g = Game::new();
         g.demo = true;
@@ -3018,7 +4398,8 @@ mod tests {
                 g.catalog.skins.len(),
                 g.catalog.modes.len()
             ),
-            (28, 11, 10)
+            // Original inventory plus the existing expansion and companion pack.
+            (69, 17, 23)
         );
         assert!(g.save.owned.contains("Grenades"));
         assert!(!g.save.owned.contains("Shotgun"));
@@ -3036,7 +4417,14 @@ mod tests {
     fn purchases_require_cash_and_cannot_charge_twice() {
         let mut g = game();
         g.action(Action::Store("Items".into()));
-        g.action(Action::Row(5));
+        // Selected by name, not index: the catalogue grows, and an index that
+        // silently points at a different item makes this test lie.
+        let row = g
+            .entries(&g.panel)
+            .iter()
+            .position(|e| e.name == "Molotov Cocktails")
+            .unwrap();
+        g.action(Action::Row(row));
         g.action(Action::Buy);
         assert!(!g.save.owned.contains("Molotov Cocktails"));
         g.save.cash = 100.;
@@ -3045,6 +4433,151 @@ mod tests {
         assert!(g.save.owned.contains("Molotov Cocktails"));
         g.action(Action::Buy);
         assert_eq!(g.save.cash, 40.);
+    }
+
+    /// Every item added after the source catalogue was extracted must actually
+    /// do something. Without this, a name that matches no branch falls through
+    /// to the generic throwable handler and would ship as a silent impostor.
+    #[test]
+    fn added_tools_do_something_of_their_own() {
+        let added = [
+            "Marbles",
+            "Snowballs",
+            "Basketballs",
+            "Water Balloons",
+            "Tomatoes",
+            "Soap",
+            "Firecracker",
+            "Lightning",
+            "Fire Extinguisher",
+            "Dynamite",
+            "Crossbow",
+            "Cherry Bombs",
+            "Bomb",
+            "Nail Gun",
+            "Healing Wave",
+            "Telekinesis",
+            "Bazooka",
+        ];
+        let g = game();
+        for name in added {
+            assert!(
+                g.catalog.items.iter().any(|e| e.name == name),
+                "{name} is wired up but missing from the catalogue"
+            );
+            assert!(
+                !is_special_tool(name) || name == "Telekinesis",
+                "{name} should not have been classed as a carried special"
+            );
+        }
+        // Telekinesis is the one added tool that is carried rather than thrown.
+        assert!(is_special_tool("Telekinesis"));
+        // The new throwables must not be the generic catch-all shape.
+        for name in [
+            "Marbles",
+            "Snowballs",
+            "Basketballs",
+            "Water Balloons",
+            "Bomb",
+        ] {
+            assert_ne!(
+                objects::properties(name),
+                objects::properties("Something Unlisted"),
+                "{name} would use the default physics"
+            );
+            assert!(fuse_seconds(name).is_finite() || name != "Bomb");
+        }
+        for name in ["Firecracker", "Dynamite", "Cherry Bombs", "Bomb"] {
+            assert!(
+                fuse_seconds(name).is_finite(),
+                "{name} is sold as an explosive but never detonates"
+            );
+        }
+        for name in ["Marbles", "Snowballs", "Basketballs", "Soap"] {
+            assert!(fuse_seconds(name).is_infinite());
+        }
+    }
+    #[test]
+    fn pet_items_are_hidden_and_gunshots_break_trust() {
+        let mut g = game();
+        g.save.pet.enabled = false;
+        assert!(!g.entries("Items").iter().any(|e| e.category == "Pet Items"));
+        let food = g
+            .catalog
+            .items
+            .iter()
+            .find(|e| e.name == "Food Bowl")
+            .unwrap()
+            .clone();
+        g.save.favorites.insert(food.name.clone());
+        assert!(!g.in_category(&food, "Favorites"));
+        g.action(Action::Select("Items".into(), "Food Bowl".into()));
+        assert_ne!(g.save.item, "Food Bowl");
+        g.save.pet.enabled = true;
+        assert!(g.entries("Items").iter().any(|e| e.category == "Pet Items"));
+        for weapon in ["Pistol", "Machine Gun", "Shotgun"] {
+            g.save.pet.affection = 60.;
+            let torso = g.buddy.parts[5].pos;
+            g.fire_bullet(torso - Vec2::new(40., 0.), Vec2::X, weapon);
+            for _ in 0..10 {
+                g.advance_bullets(0.);
+            }
+            assert!(g.save.pet.affection < 60., "{weapon} did not reduce trust");
+            assert_eq!(g.emotion, g.save.pet.affection * 2. - 100.);
+            g.bullets.clear();
+        }
+        let trust = g.save.pet.affection;
+        g.explode(g.buddy.parts[5].pos, 1.);
+        assert!(g.save.pet.affection < trust);
+    }
+    #[test]
+    fn bazooka_launches_from_cursor_instead_of_sky() {
+        let mut g = game();
+        g.save.item = "Bazooka".into();
+        g.mouse = Vec2::new(80., 160.);
+        g.down = true;
+        g.pressed = true;
+        let mut app = App::new();
+        app.insert_resource(g).add_systems(Update, simulate);
+        app.update();
+        let g = app.world().resource::<Game>();
+        assert!(
+            g.objects
+                .iter()
+                .any(|o| o.kind == "Bazooka Rocket" && o.pos.y > 0.)
+        );
+        assert!(!g.objects.iter().any(|o| o.kind == "Missiles"));
+    }
+    #[test]
+    fn last_shop_page_and_timed_explosions_are_reachable() {
+        let mut g = game();
+        g.panel = "Items".into();
+        for _ in 0..20 {
+            g.action(Action::Page(1));
+        }
+        assert_eq!(g.page, 6);
+        let last = g.entries("Items").len() - 1;
+        g.action(Action::Row(last));
+        assert_eq!(g.row, Some(last));
+        for kind in ["Firecracker", "Dynamite", "Cherry Bombs", "Bomb"] {
+            let mut g = game();
+            g.objects.push(Object {
+                pos: g.buddy.parts[5].pos,
+                prev: g.buddy.parts[5].pos,
+                r: 8.,
+                kind: kind.into(),
+                life: 0.001,
+                held: false,
+                hit_timer: 0,
+                window_hit_timer: 0,
+            });
+            let mut app = App::new();
+            app.insert_resource(g).add_systems(Update, simulate);
+            app.update();
+            let g = app.world().resource::<Game>();
+            assert!(g.objects.is_empty());
+            assert!(!g.fx.is_empty(), "{kind} never exploded");
+        }
     }
     #[test]
     fn skin_ids_and_mode_ids_are_resolved() {
@@ -3192,13 +4725,29 @@ mod tests {
     }
 
     #[test]
+    fn moving_the_pointer_over_the_arena_keeps_the_panel_open() {
+        // Regression: with the Fist equipped the arena counts as active
+        // whenever the pointer is over it, and dismissing the panel on
+        // activity made Items and Skins unreachable — the panel closed the
+        // moment the pointer left the rail on its way to it.
+        assert!(
+            !panel_dismissal(true, false),
+            "pointer movement alone must not dismiss the panel"
+        );
+        // A real click in the arena still gets the menu out of the way.
+        assert!(panel_dismissal(true, true));
+        // Nothing happens when no tool is in use at all.
+        assert!(!panel_dismissal(false, true));
+    }
+
+    #[test]
     fn desktop_missile_reaches_buddy_in_front_of_a_window() {
         let mut g = game();
         g.desktop = true;
         g.desktop_windows.push(desktop_windows::WindowRect {
             id: 1,
-            min: Vec2::ZERO,
-            max: Vec2::new(W, H),
+            min: Vec2::new(-10., 0.),
+            max: Vec2::new(200., H),
         });
         let body = g.buddy.parts[5].pos;
         g.objects.push(Object {
@@ -3299,5 +4848,79 @@ mod tests {
         assert_eq!(saved.emotion, 31.);
         assert_eq!(saved.script_code, g.code);
         std::fs::remove_file(&g.save_path).unwrap();
+    }
+
+    #[test]
+    fn capacity_limits_warn_instead_of_dropping_silently() {
+        let mut g = game();
+        g.save.item = "Baseballs".into();
+        for i in 0..40 {
+            g.objects.push(Object {
+                pos: Vec2::new(100. + i as f32, 100.),
+                prev: Vec2::new(100. + i as f32, 100.),
+                r: 3.,
+                kind: "Baseballs".into(),
+                life: f32::INFINITY,
+                held: false,
+                hit_timer: 0,
+                window_hit_timer: 0,
+            });
+        }
+        g.pressed = true;
+        g.mouse = Vec2::new(200., 150.);
+        let mut app = App::new();
+        app.insert_resource(g)
+            .insert_resource(Time::<Real>::default())
+            .add_systems(Update, (simulate, content::notice_timers).chain());
+        app.update();
+        {
+            let g = app.world().resource::<Game>();
+            assert_eq!(g.objects.len(), 40, "the cap must still be enforced");
+            assert!(g.warn.contains("Object limit"), "got {:?}", g.warn);
+            assert!(g.warn_time > 0.);
+        }
+        // Notice expiry uses wall time even when physics is paused.
+        app.world_mut().resource_mut::<Game>().paused = true;
+        for _ in 0..120 {
+            app.world_mut()
+                .resource_mut::<Time<Real>>()
+                .advance_by(std::time::Duration::from_secs_f32(1. / 36.));
+            app.update();
+        }
+        let g = app.world().resource::<Game>();
+        assert_eq!(g.warn_time, 0., "warnings must expire on their own");
+        assert!(
+            g.warn.contains("Object limit"),
+            "text is kept for the frame"
+        );
+    }
+
+    #[test]
+    fn bullet_cap_warns_instead_of_dropping_silently() {
+        let mut g = game();
+        g.bullets = (0..256)
+            .map(|_| Bullet {
+                pos: Vec2::new(200., 200.),
+                velocity: Vec2::ZERO,
+                strength: 1.,
+                ricochets: 0,
+                shotgun: false,
+                age: 0,
+                window_hit: false,
+            })
+            .collect();
+        g.fire_bullet(Vec2::new(100., 200.), Vec2::new(1., 0.), "Pistol");
+        assert_eq!(g.bullets.len(), 256);
+        assert!(g.warn.contains("Bullet limit"), "got {:?}", g.warn);
+    }
+
+    #[test]
+    fn warnings_do_not_clobber_action_results() {
+        let mut g = game();
+        g.notify("bought");
+        g.warn("Object limit reached (40)");
+        assert_eq!(g.message, "bought");
+        assert!(g.message_time > 0.);
+        assert_ne!(g.message, g.warn);
     }
 }

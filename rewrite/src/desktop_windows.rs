@@ -608,6 +608,7 @@ fn point_inside(point: Vec2, rect: WindowRect) -> bool {
     point.x >= rect.min.x && point.x <= rect.max.x && point.y >= rect.min.y && point.y <= rect.max.y
 }
 
+/// How much of its speed a particle keeps when a window border throws it back.
 fn distance_to_rect(point: Vec2, rect: WindowRect) -> f32 {
     let nearest = point.clamp(rect.min, rect.max);
     nearest.distance(point)

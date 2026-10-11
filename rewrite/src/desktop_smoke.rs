@@ -149,6 +149,14 @@ pub fn run(
                 let velocity = Vec2::new(7.0, -11.0 + (index as f32 - 2.5) * 0.35);
                 part.prev -= velocity;
             }
+            // The desktop overlay must surface action results and capacity
+            // notices; this frame's screenshot covers both bubbles.
+            game.notify("SMOKE: speech bubble");
+            game.warn("Object limit reached (40)");
+            assert!(
+                game.message_time > 0. && game.warn_time > 0.,
+                "desktop smoke test could not raise a visible notice"
+            );
             assert_clickthrough_state(&game, *frame);
             Some("desktop-03")
         }
@@ -156,6 +164,107 @@ pub fn run(
             game.action(Action::Store("Items".into()));
             assert_clickthrough_state(&game, *frame);
             Some("desktop-04")
+        }
+        290 => {
+            // Cover a second and third section so the compact panels are all
+            // captured, not just the tallest one.
+            game.panel.clear();
+            if game.desktop_section != "File" {
+                game.action(Action::DesktopSection("File".into()));
+            }
+            assert_clickthrough_state(&game, *frame);
+            Some("desktop-05")
+        }
+        300 => {
+            if game.desktop_section != "Settings" {
+                game.action(Action::DesktopSection("Settings".into()));
+            }
+            assert!(
+                game.desktop_section == "Settings",
+                "the rail must be able to switch sections"
+            );
+            assert_clickthrough_state(&game, *frame);
+            Some("desktop-06")
+        }
+        310 => {
+            // Passthrough has to be driven for real here. It used to be dead
+            // code in every test, which is how it shipped locking the player
+            // out of the menu with no way back in.
+            game.set_passthrough(true);
+            assert!(
+                game.save.mouse_passthrough,
+                "desktop smoke test could not turn click-through on"
+            );
+            let menu = crate::desktop_ui::menu_center(&game);
+            assert!(
+                game.desktop_hit(menu),
+                "the menu button must stay clickable while clicks pass through"
+            );
+            assert!(
+                !game.desktop_hit(game.stage * 0.5),
+                "the room must let clicks through while passthrough is on"
+            );
+            Some("desktop-07-passthrough")
+        }
+        330 => {
+            game.set_passthrough(false);
+            assert!(
+                !game.save.mouse_passthrough,
+                "desktop smoke test could not turn click-through off"
+            );
+            assert!(
+                game.desktop_hit(crate::desktop_ui::menu_center(&game)),
+                "turning click-through off must leave the menu reachable"
+            );
+            if game.desktop_section != "Help" {
+                game.action(Action::DesktopSection("Help".into()));
+            }
+            assert_clickthrough_state(&game, *frame);
+            Some("desktop-08")
+        }
+        350 => {
+            // Capture the weapon state, where the desktop stops taking clicks
+            // and the player is told why. This is the state that trapped the
+            // player twice, so it gets a screenshot of its own.
+            game.action(Action::DesktopSection("Items".into()));
+            game.action(Action::Select("Items".into(), "Bazooka".into()));
+            assert!(
+                game.desktop_interact,
+                "desktop smoke test expected a weapon to take the desktop"
+            );
+            assert!(
+                crate::desktop_blocked_by(&game) == Some("weapon equipped"),
+                "desktop smoke test expected the status line to say why"
+            );
+            assert!(
+                game.message.contains("right-click"),
+                "desktop smoke test expected the escape route to be advertised"
+            );
+            Some("desktop-09-weapon")
+        }
+        370 => {
+            game.action(Action::Hand);
+            assert_eq!(game.save.item, "Open Hand");
+            assert!(
+                !game.desktop_interact,
+                "putting the tool away must give the desktop its clicks back"
+            );
+            assert_eq!(crate::desktop_blocked_by(&game), None);
+            Some("desktop-10-hand")
+        }
+        400 => {
+            let area = game.desktop_area.expect("validated desktop area");
+            println!(
+                "DESKTOP SMOKE TEST PASSED: stage={:.0}x{:.0}, work_area={}x{} at ({},{}), clickthrough=idle",
+                game.stage.x,
+                game.stage.y,
+                area.width(),
+                area.height(),
+                area.left,
+                area.top
+            );
+            exit.write(AppExit::Success);
+            None
         }
         320 => {
             assert!(
@@ -179,17 +288,6 @@ pub fn run(
                 "desktop work area was not initialized"
             );
             assert_clickthrough_state(&game, *frame);
-            let area = game.desktop_area.expect("validated desktop area");
-            println!(
-                "DESKTOP SMOKE TEST PASSED: stage={:.0}x{:.0}, work_area={}x{} at ({},{}), clickthrough=idle",
-                game.stage.x,
-                game.stage.y,
-                area.width(),
-                area.height(),
-                area.left,
-                area.top
-            );
-            exit.write(AppExit::Success);
             None
         }
         _ => None,

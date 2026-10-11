@@ -1,0 +1,565 @@
+{
+ "source": "Interactive Buddy v1.02 local extracted SWF: decomp/scripts/frame_25/DoAction.as, defineTheItems() and compileItems/compileSkins/compileModes",
+ "currency": "cash",
+ "topLevelMenus": [
+  "File",
+  "Skins",
+  "Items",
+  "Modes",
+  "Settings",
+  "Help"
+ ],
+ "hierarchy": {
+  "Items": {
+   "categoryOrder": [
+    "Pet Items",
+    "Explosives",
+    "God Powers",
+    "Guns",
+    "Hand",
+    "Miscellaneous",
+    "Objects",
+    "Special"
+   ],
+   "categories": {
+    "Explosives": [
+     "Missiles",
+     "Flamethrower",
+     "Mines",
+     "Molotov Cocktails",
+     "Grenades"
+    ],
+    "God Powers": [
+     "Explode At Mouse",
+     "Fireballs",
+     "Strong Gravity Vortex",
+     "Weak Gravity Vortex"
+    ],
+    "Guns": [
+     "Machine Gun",
+     "Shotgun",
+     "Pistol"
+    ],
+    "Hand": [
+     "None",
+     "Open Hand",
+     "Tickle",
+     "Fist"
+    ],
+    "Miscellaneous": [
+     "Stun Gun",
+     "Fire Hose",
+     "Medieval Flail",
+     "Narrow Nozzle Hose",
+     "Wide Nozzle Hose"
+    ],
+    "Objects": [
+     "Infants",
+     "Bowling Balls",
+     "Rubber Balls",
+     "Baseballs"
+    ],
+    "Special": [
+     "Radio",
+     "Gravity Shifter",
+     "Magical Orb"
+    ]
+   },
+   "storeAction": "Buy New Items..."
+  },
+  "Skins": {
+   "storeAction": "Buy New Skins..."
+  },
+  "Modes": {
+   "menuOrder": [
+    "Scripting Engine Access...",
+    "Blood and Gore",
+    "Alternate Body Physics",
+    "Earthquake",
+    "Dynamic Camera",
+    "Realistic Pyrotechnics",
+    "Low Gravity",
+    "NES Style Movement",
+    "FPS Counter",
+    "Open Ceiling"
+   ],
+   "storeAction": "Buy New Modes..."
+  },
+  "Settings": {
+   "Anti-Aliasing": [
+    "Low",
+    "Medium",
+    "High"
+   ],
+   "Effects": [
+    "Low",
+    "Medium",
+    "High"
+   ],
+   "Motion Blur": [
+    "None",
+    "Weak",
+    "Strong"
+   ],
+   "other": [
+    "Physics...",
+    "Sound Enabled"
+   ]
+  }
+ },
+ "items": [
+  {"name":"Pet Cage","type":"petcage","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Tractor Beam","type":"tractorbeam","category":"God Powers","price":150,"initiallyOwned":false},
+  {"name":"Launch Pad","type":"launchpad","category":"Special","price":100,"initiallyOwned":false},
+  {"name":"Portal Gun","type":"portalgun","category":"God Powers","price":180,"initiallyOwned":false},
+  {"name":"Grappling Hook","type":"grapple","category":"Special","price":140,"initiallyOwned":false},
+  {"name":"Stasis Field","type":"stasis","category":"God Powers","price":160,"initiallyOwned":false},
+  {"name":"Food Bowl","type":"foodbowl","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Water Bowl","type":"waterbowl","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Toy Basket","type":"toybasket","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Pet Bed","type":"petbed","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Litter Tray","type":"littertray","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Poop Scoop","type":"poopscoop","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Pet Soap","type":"petsoap","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Pet Medicine","type":"petmedicine","category":"Pet Items","price":0,"initiallyOwned":true},
+  {"name":"Feather Wand","type":"featherwand","category":"Pet Items","price":40,"initiallyOwned":false},
+  {"name":"Pet Brush","type":"petbrush","category":"Pet Items","price":35,"initiallyOwned":false},
+  {"name":"Rubber Ducks","type":"duck","category":"Objects","price":60,"initiallyOwned":false},
+  {"name":"Ice Wand","type":"icewand","category":"God Powers","price":100,"initiallyOwned":false},
+  {"name":"Sparkler","type":"sparkler","category":"Miscellaneous","price":70,"initiallyOwned":false},
+  {"name":"Beach Balls","category":"Objects","price":35,"initiallyOwned":false},
+  {"name":"Anvils","category":"Objects","price":90,"initiallyOwned":false},
+  {"name":"Bubble Wand","category":"Miscellaneous","price":65,"initiallyOwned":false},
+  {"name":"Repulsor","category":"God Powers","price":180,"initiallyOwned":false},
+  {"name":"Confetti Cannon","category":"Special","price":110,"initiallyOwned":false},
+  {
+   "name": "None",
+   "category": "Hand",
+   "price": 0,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Open Hand",
+   "category": "Hand",
+   "price": 0,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Tickle",
+   "category": "Hand",
+   "price": 0,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Fist",
+   "category": "Hand",
+   "price": 0,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Firecracker",
+   "category": "Explosives",
+   "price": 35,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Grenades",
+   "category": "Explosives",
+   "price": 50,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Molotov Cocktails",
+   "category": "Explosives",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Dynamite",
+   "category": "Explosives",
+   "price": 70,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Mines",
+   "category": "Explosives",
+   "price": 80,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Cherry Bombs",
+   "category": "Explosives",
+   "price": 90,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Flamethrower",
+   "category": "Explosives",
+   "price": 100,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Missiles",
+   "category": "Explosives",
+   "price": 100,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Bomb",
+   "category": "Explosives",
+   "price": 120,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Bazooka",
+   "category": "Explosives",
+   "price": 260,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Weak Gravity Vortex",
+   "category": "God Powers",
+   "price": 20,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Strong Gravity Vortex",
+   "category": "God Powers",
+   "price": 30,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Fireballs",
+   "category": "God Powers",
+   "price": 40,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Explode At Mouse",
+   "category": "God Powers",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Lightning",
+   "category": "God Powers",
+   "price": 70,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Healing Wave",
+   "category": "God Powers",
+   "price": 150,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Pistol",
+   "category": "Guns",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Crossbow",
+   "category": "Guns",
+   "price": 90,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Shotgun",
+   "category": "Guns",
+   "price": 100,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Nail Gun",
+   "category": "Guns",
+   "price": 130,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Machine Gun",
+   "category": "Guns",
+   "price": 140,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Marbles",
+   "category": "Objects",
+   "price": 10,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Baseballs",
+   "category": "Objects",
+   "price": 15,
+   "initiallyOwned": true
+  },
+  {
+   "name": "Rubber Balls",
+   "category": "Objects",
+   "price": 20,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Snowballs",
+   "category": "Objects",
+   "price": 20,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Basketballs",
+   "category": "Objects",
+   "price": 25,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Water Balloons",
+   "category": "Objects",
+   "price": 30,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Bowling Balls",
+   "category": "Objects",
+   "price": 40,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Tomatoes",
+   "category": "Objects",
+   "price": 45,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Infants",
+   "category": "Objects",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Wide Nozzle Hose",
+   "category": "Miscellaneous",
+   "price": 15,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Narrow Nozzle Hose",
+   "category": "Miscellaneous",
+   "price": 20,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Soap",
+   "category": "Miscellaneous",
+   "price": 25,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Medieval Flail",
+   "category": "Miscellaneous",
+   "price": 40,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Fire Hose",
+   "category": "Miscellaneous",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Fire Extinguisher",
+   "category": "Miscellaneous",
+   "price": 70,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Stun Gun",
+   "category": "Miscellaneous",
+   "price": 85,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Magical Orb",
+   "category": "Special",
+   "price": 160,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Telekinesis",
+   "category": "Special",
+   "price": 180,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Gravity Shifter",
+   "category": "Special",
+   "price": 240,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Radio",
+   "category": "Special",
+   "price": 320,
+   "initiallyOwned": false
+  }
+ ],
+ "skins": [
+  {"name":"Neon","type":"neon","price":80,"initiallyOwned":false},
+  {"name":"Ice","type":"ice","price":80,"initiallyOwned":false},
+  {"name":"Ember","type":"ember","price":80,"initiallyOwned":false},
+  {"name":"Robot","type":"robot","price":80,"initiallyOwned":false},
+  {"name":"Cosmic","type":"cosmic","price":80,"initiallyOwned":false},
+  {"name":"Slime","type":"slime","price":80,"initiallyOwned":false},
+  {
+   "name": "Teletubby",
+   "type": "teletubby",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Maddox",
+   "type": "pirate",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "StrawberryClock",
+   "type": "strawberry",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Gregor the Goth",
+   "type": "goth",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Republican",
+   "type": "rep",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Democrat",
+   "type": "dem",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Moore",
+   "type": "baby",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Gates",
+   "type": "gates",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Tom",
+   "type": "tom",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Napoleon",
+   "type": "nap",
+   "price": 60,
+   "initiallyOwned": false
+  },
+  {
+   "name": "Buddy",
+   "type": "default",
+   "price": 0,
+   "initiallyOwned": true
+  }
+ ],
+ "modes": [
+  {"name":"Gravity Carousel","type":"gravityCarousel","price":130,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Toy Swarm","type":"toySwarm","price":140,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Pinball Arena","type":"pinball","price":150,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Tethered Toys","type":"tetheredToys","price":120,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Chain Reaction","type":"chainReaction","price":140,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Bubble Shower","type":"bubbleShower","price":60,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Toy Orbit","type":"toyOrbit","price":80,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Glitter Trail","type":"glitter","price":65,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Zero Gravity","type":"zerograv","price":80,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Super Bounce","type":"superbounce","price":70,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Wind Tunnel","type":"wind","price":60,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Magnetic Cursor","type":"magnet","price":80,"initiallyOwned":false,"kind":"toggle"},
+  {"name":"Party Time","type":"party","price":50,"initiallyOwned":false,"kind":"toggle"},
+  {
+   "name": "FPS Counter",
+   "type": "fps",
+   "price": 0,
+   "initiallyOwned": true,
+   "kind": "toggle"
+  },
+  {
+   "name": "Open Ceiling",
+   "type": "openCeil",
+   "price": 0,
+   "initiallyOwned": true,
+   "kind": "toggle"
+  },
+  {
+   "name": "Low Gravity",
+   "type": "lowGrav",
+   "price": 20,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "NES Style Movement",
+   "type": "lag",
+   "price": 20,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Blood and Gore",
+   "type": "gore",
+   "price": 40,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Alternate Body Physics",
+   "type": "realPhysics",
+   "price": 40,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Earthquake",
+   "type": "earthquake",
+   "price": 40,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Dynamic Camera",
+   "type": "dynCam",
+   "price": 40,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Realistic Pyrotechnics",
+   "type": "pyroMode",
+   "price": 40,
+   "initiallyOwned": false,
+   "kind": "toggle"
+  },
+  {
+   "name": "Scripting Engine Access...",
+   "type": "script",
+   "price": 400,
+   "initiallyOwned": false,
+   "kind": "action"
+  }
+ ]
+}

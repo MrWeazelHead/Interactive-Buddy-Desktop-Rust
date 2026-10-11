@@ -1,10 +1,13 @@
 # Copyright-sensitive source and supplied materials
-rewrite/assets/
+rewrite/assets/*
+!rewrite/assets/catalog.json
+!rewrite/assets/content_manifest.json
+!rewrite/assets/README.md
 rewrite/target/
 rewrite/screenshots/
 source/
 decomp/
-assets/
+/assets/
 dist/
 screenshots/
 *.swf

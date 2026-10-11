@@ -1,0 +1,527 @@
+{
+  "skins/robot_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/robot_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/robot_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/robot_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/robot_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/robot_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "skins/cosmic_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/cosmic_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/cosmic_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/cosmic_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/cosmic_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/cosmic_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "skins/slime_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/slime_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/slime_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/slime_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/slime_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/slime_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "skins/neon_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/neon_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/neon_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/neon_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/neon_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/neon_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "skins/ice_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/ice_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/ice_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/ice_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/ice_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/ice_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "skins/ember_head.png": {
+    "size": [
+      54,
+      79
+    ],
+    "base": "skins/default_head.png"
+  },
+  "skins/ember_body.png": {
+    "size": [
+      55,
+      73
+    ],
+    "base": "skins/default_body.png"
+  },
+  "skins/ember_rArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rArm.png"
+  },
+  "skins/ember_lArm.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_lArm.png"
+  },
+  "skins/ember_rLeg.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "skins/default_rLeg.png"
+  },
+  "skins/ember_lLeg.png": {
+    "size": [
+      24,
+      22
+    ],
+    "base": "skins/default_lLeg.png"
+  },
+  "tools/beachball.png": {
+    "size": [
+      22,
+      22
+    ],
+    "base": "tools/bowlball.png"
+  },
+  "tools/anvil.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/bubblewand.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/repulsor.png": {
+    "size": [
+      34,
+      34
+    ],
+    "base": "tools/vortex.png"
+  },
+  "tools/confetti.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/pistol.png"
+  },
+  "tools/tomato.png": {
+    "size": [
+      13,
+      13
+    ],
+    "base": "tools/baseball.png"
+  },
+  "tools/basketball.png": {
+    "size": [
+      13,
+      13
+    ],
+    "base": "tools/baseball.png"
+  },
+  "tools/snowball.png": {
+    "size": [
+      13,
+      13
+    ],
+    "base": "tools/baseball.png"
+  },
+  "tools/waterballoon.png": {
+    "size": [
+      13,
+      13
+    ],
+    "base": "tools/baseball.png"
+  },
+  "tools/marble.png": {
+    "size": [
+      8,
+      8
+    ],
+    "base": "tools/rubberball.png"
+  },
+  "tools/cherrybomb.png": {
+    "size": [
+      14,
+      18
+    ],
+    "base": "tools/grenade.png"
+  },
+  "tools/bomb.png": {
+    "size": [
+      14,
+      18
+    ],
+    "base": "tools/grenade.png"
+  },
+  "tools/dynamite.png": {
+    "size": [
+      14,
+      18
+    ],
+    "base": "tools/grenade.png"
+  },
+  "tools/firecracker.png": {
+    "size": [
+      14,
+      18
+    ],
+    "base": "tools/grenade.png"
+  },
+  "tools/fireball_custom.png": {
+    "size": [
+      14,
+      14
+    ],
+    "base": "tools/fireball.png"
+  },
+  "tools/machinegun_custom.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/machineGun.png"
+  },
+  "tools/shotgun_custom.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/shotgun.png"
+  },
+  "tools/duck.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/icewand.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/sparkler.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/foodbowl.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/waterbowl.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/toybasket.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/petbed.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/featherwand.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/petbrush.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/petcage.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/tractorbeam.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/pistol.png"
+  },
+  "tools/launchpad.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/portalgun.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/pistol.png"
+  },
+  "tools/grapple.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/pistol.png"
+  },
+  "tools/stasis.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/bazooka_launcher.png": {
+    "size": [
+      36,
+      23
+    ],
+    "base": "tools/pistol.png"
+  },
+  "tools/bazooka_rocket.png": {
+    "size": [
+      21,
+      76
+    ],
+    "base": "tools/missile.png"
+  },
+  "tools/littertray.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/poopscoop.png": {
+    "size": [
+      34,
+      14
+    ],
+    "base": "tools/stunGun.png"
+  },
+  "tools/petsoap.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/petmedicine.png": {
+    "size": [
+      24,
+      24
+    ],
+    "base": "tools/radio.png"
+  },
+  "tools/poop.png": {
+    "size": [
+      13,
+      13
+    ],
+    "base": "tools/baseball.png"
+  }
+}

@@ -42,7 +42,21 @@ pub fn properties(kind: &str) -> Properties {
         "baby" | "infant" | "infants" => p(0.5, 20.0, 0.1, 0.2),
         "radio" => p(0.375, 14.75, 0.2, 0.85),
         "orb" | "magicalorb" => p(0.05, 24.5, 0.85, 0.85),
-        "vortex" | "gravityshifter" => p(0.5, 20.5, 0.9, 0.9),
+        "vortex" | "gravityshifter" | "telekinesis" => p(0.5, 20.5, 0.9, 0.9),
+        // Added after the source catalogue was matched: these reuse the proven
+        // behaviour of an existing tool, so only the mass and size are new.
+        "beachball" | "beachballs" => p(0.05, 11.0, 0.92, 0.98),
+        "anvil" | "anvils" => p(2.0, 12.0, 0.03, 0.45),
+        "duck" | "rubberduck" | "rubberducks" => p(0.06, 10.0, 0.65, 0.85),
+        "marble" | "marbles" => p(0.08, 3.5, 0.85, 0.9),
+        "snowball" | "snowballs" => p(0.12, 5.5, 0.35, 0.7),
+        "basketball" | "basketballs" => p(0.32, 7.2, 0.72, 0.8),
+        "waterballoon" | "waterballoons" => p(0.06, 6.0, 0.12, 0.9),
+        "tomato" | "tomatoes" => p(0.18, 6.2, 0.3, 0.85),
+        "firecracker" => p(0.1, 4.5, 0.3, 0.7),
+        "dynamite" => p(0.4, 9.0, 0.15, 0.6),
+        "cherrybombs" | "cherrybomb" => p(0.38, 8.5, 0.2, 0.6),
+        "bomb" => p(0.8, 12.5, 0.1, 0.55),
         _ => p(0.3, 8.0, 0.2, 0.8),
     }
 }
@@ -239,6 +253,16 @@ mod tests {
         assert!(finite_vec(c.a_velocity) && finite_vec(c.b_velocity));
         close(c.a_pos.x, 2.01);
         close(c.b_pos.x, -2.01);
+    }
+
+    #[test]
+    fn rubber_ducks_are_light_and_moderately_bouncy() {
+        let duck = p(0.06, 10.0, 0.65, 0.85);
+        for name in ["Rubber Ducks", "rubber-duck", "duck"] {
+            assert_eq!(properties(name), duck);
+        }
+        assert_ne!(duck, properties("Beach Balls"));
+        assert_ne!(duck, properties("Rubber Balls"));
     }
 
     #[test]
